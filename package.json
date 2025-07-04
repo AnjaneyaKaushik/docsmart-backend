@@ -3,19 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev ",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "next": "15.3.4"
+    "@pdfme/converter": "^5.4.0",
+    "@pdfme/manipulator": "^5.4.0",
+    "archiver": "^7.0.1",
+    "child-process": "^1.0.2",
+    "compress-pdf": "^0.5.4",
+    "formidable": "^3.5.4",
+    "next": "^15.3.4",
+    "pdf-officegen": "^3.0.0",
+    "pdfjs-dist": "^5.3.31",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3",
     "eslint": "^9",
-    "eslint-config-next": "15.3.4",
-    "@eslint/eslintrc": "^3"
+    "eslint-config-next": "15.3.4"
   }
 }
