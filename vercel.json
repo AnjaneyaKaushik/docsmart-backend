@@ -1,0 +1,23 @@
+    {
+      "build": {
+        "env": {
+          "NPM_CONFIG_UPDATE_NOTIFIER": "false",
+          "NPM_CONFIG_FUND": "false"
+        }
+      },
+      "installCommand": "npm install",
+      "builds": [
+        {
+          "src": "package.json",
+          "use": "@vercel/node"
+        },
+        {
+          "src": "src/app/api/**/*.js",
+          "use": "@vercel/node"
+        }
+      ],
+      "plugins": [
+        "@vercel/build-plugin-canvas"
+      ]
+    }
+    
