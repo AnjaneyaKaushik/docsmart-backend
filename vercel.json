@@ -15,6 +15,6 @@
           "src": "src/app/api/**/*.js",
           "use": "@vercel/node"
         }
-      ],
+      ]
     }
     
