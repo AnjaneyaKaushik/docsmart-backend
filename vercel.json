@@ -16,8 +16,5 @@
           "use": "@vercel/node"
         }
       ],
-      "plugins": [
-        "@vercel/build-plugin-canvas"
-      ]
     }
     
