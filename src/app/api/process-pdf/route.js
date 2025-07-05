@@ -214,21 +214,25 @@ export async function POST(request) {
         }
         console.log("Processing compress using npx compress-pdf CLI...");
         const inputPdfPath = filesToProcess[0].filepath; // Path to the uploaded file
-        const outputPdfDir = path.join(process.cwd(), 'tmp', 'compressed_output', uuidv4()); // Unique output dir
-        await fs.mkdir(outputPdfDir, { recursive: true });
-        const outputPdfPath = path.join(outputPdfDir, `${path.basename(filesToProcess[0].originalFilename, path.extname(filesToProcess[0].originalFilename))}_compressed.pdf`);
 
-        // IMPORTANT KEY CHANGE: Create the output directory recursively
+        // Define the output directory and file path
+        const compressOutputUniqueDir = path.join(process.cwd(), 'tmp', 'compressed_output', uuidv4()); // Unique output dir
+        const compressOutputFileName = `${path.basename(filesToProcess[0].originalFilename, path.extname(filesToProcess[0].originalFilename))}_compressed.pdf`;
+        const compressOutputFilePath = path.join(compressOutputUniqueDir, compressOutputFileName);
+
+        // --- FIX START: Ensure output directory is created (no redundant try-catch) ---
         try {
-            await fs.mkdir(outputPdfDir, { recursive: true });
-            console.log(`Ensured output directory exists: ${outputDir}`);
+            await fs.mkdir(compressOutputUniqueDir, { recursive: true });
+            console.log(`Ensured output directory exists for compress: ${compressOutputUniqueDir}`);
         } catch (dirError) {
-            console.error(`Error creating output directory ${outputDir}:`, dirError);
+            console.error(`Error creating output directory ${compressOutputUniqueDir}:`, dirError);
             return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500 });
         }
+        // --- FIX END ---
 
         try {
-          const command = `npx compress-pdf --file "${inputPdfPath}" --output "${outputPdfPath}"`;
+          // Use the correctly defined output path in the command
+          const command = `npx compress-pdf --file "${inputPdfPath}" --output "${compressOutputFilePath}"`;
           console.log(`Executing command: ${command}`);
 
           await new Promise((resolve, reject) => {
@@ -247,19 +251,26 @@ export async function POST(request) {
               resolve();
             });
           });
-          console.log(`PDF compressed from ${inputPdfPath} to ${outputPdfPath} via CLI.`);
+          console.log(`PDF compressed from ${inputPdfPath} to ${compressOutputFilePath} via CLI.`);
         } catch (cliError) {
           console.error('Error during CLI compress-pdf execution:', cliError);
           throw new Error(`PDF compression failed: ${cliError.message}`);
         }
 
-        finalProcessedBuffer = await fs.readFile(outputPdfPath);
+        finalProcessedBuffer = await fs.readFile(compressOutputFilePath);
         finalOutputMimeType = 'application/pdf';
         finalOutputExtension = '.pdf';
-        baseProcessedFileName = path.basename(outputPdfPath, finalOutputExtension); 
+        baseProcessedFileName = path.basename(compressOutputFileName, finalOutputExtension); 
 
-        await fs.unlink(outputPdfPath).catch(err => console.error(`Error cleaning up temp compressed file ${outputPdfPath}:`, err));
-        await fs.rm(outputPdfDir, { recursive: true, force: true }).catch(err => console.error(`Error cleaning up temp compressed directory ${outputPdfDir}:`, err));
+        // --- FIX START: Corrected cleanup logic for compress tool ---
+        try {
+            // Clean up the unique output directory (and its content)
+            await fs.rm(compressOutputUniqueDir, { recursive: true, force: true });
+            console.log(`Cleaned up temporary compressed output directory: ${compressOutputUniqueDir}`);
+        } catch (cleanupDirError) {
+            console.warn(`Could not clean up temporary compressed output directory ${compressOutputUniqueDir}:`, cleanupDirError);
+        }
+        // --- FIX END ---
         break;
 
       case 'pdfToWord': // Using Python script (pdf2docx)
