@@ -3,23 +3,18 @@
 import fs from 'fs/promises'; // For reading/writing temporary files
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid'; // For generating unique IDs
-import archiver from 'archiver'; // For zipping multiple files (e.g., from split or pdfToJpg)
-import { exec, spawn } from 'child_process'; // For executing shell commands (compress-pdf CLI) and Python script
+import archiver from 'archiver'; // For zipping multiple files
+import { exec, spawn } from 'child_process'; // For executing shell commands and Python scripts
 import os from 'os'; // For os.tmpdir() to create temporary directories
 
 // Import the shared cache and cleanup service from src/lib/fileCache.js
 import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
 
 // Import @pdfme libraries:
-import { img2pdf, pdf2img } from '@pdfme/converter';
+import { img2pdf, pdf2img } from '@pdfme/converter'; // Re-importing @pdfme/converter
 import { merge, split, rotate } from '@pdfme/manipulator';
 
-// Import PDFDocument from pdf-lib for compression (if still using pdf-lib for compress, otherwise remove)
-// NOTE: For 'compress', we're now using 'npx compress-pdf' CLI, so pdf-lib is not strictly needed for 'compress'
-// but it's a good general utility for PDF if other features might use it. Keeping it for now.
-
-
-// Removed pdf-officegen imports as we are using a Python script for PDF to Word
+// Import PDFDocument from pdf-lib (still useful for general PDF operations like compression)
 
 // Ensure cleanup service is started (important for serverless functions)
 startCleanupService();
@@ -52,28 +47,25 @@ async function processPdfToWordWithPython(file) {
   await fs.mkdir(outputDir, { recursive: true });
   
   const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_converted.docx`;
-  const outputFilePath = path.join(outputDir, outputFileName); // Python script will create this file
+  const outputFilePath = path.join(outputDir, outputFileName);
 
   return new Promise((resolve, reject) => {
-    // Path to your Python script
     const pythonScriptPath = path.join(process.cwd(), 'scripts', 'convert_pdf_to_docx.py');
 
-    // Spawn the Python process
     const pythonProcess = spawn('python3', [
       pythonScriptPath,
-      file.filepath, // Input PDF path
-      outputFilePath // Desired output DOCX path
+      file.filepath,
+      outputFilePath
     ]);
 
     let stderrOutput = '';
     pythonProcess.stderr.on('data', (data) => {
       stderrOutput += data.toString();
-      console.error(`Python stderr: ${data}`);
+      console.error(`Python stderr (pdf2docx): ${data}`);
     });
 
     pythonProcess.on('close', async (code) => {
       if (code === 0) {
-        // Success
         try {
           const processedBuffer = await fs.readFile(outputFilePath);
           await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error); // Clean up output directory
@@ -87,19 +79,20 @@ async function processPdfToWordWithPython(file) {
           reject(new Error(`Failed to read converted Word file or clean up: ${readError.message}`));
         }
       } else {
-        // Failure
         await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
         reject(new Error(`PDF to Word conversion failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
       }
     });
 
     pythonProcess.on('error', (err) => {
-      // This handles errors like 'python3' not found
-      console.error('Failed to start Python subprocess:', err);
+      console.error('Failed to start Python subprocess (pdf2docx):', err);
       reject(new Error(`Failed to start Python conversion process: ${err.message}. Is Python installed and in PATH?`));
     });
   });
 }
+
+// Removed processPdfToJpgWithPython helper function
+// Removed processJpgToPdfWithPython helper function
 
 
 // Main API Route Handler for App Router
@@ -145,9 +138,9 @@ export async function POST(request) {
 
     // Define tool categories for routing logic
     const pdfmeManipulatorTools = ['merge', 'split', 'rotatePdf'];
-    const pdfmeConverterTools = ['jpgToPdf', 'pdfToJpg']; 
+    const pdfmeConverterTools = ['jpgToPdf', 'pdfToJpg']; // Re-added for @pdfme/converter
     const cliCompressTool = ['compress']; // 'compress' uses CLI
-    const pythonTools = ['pdfToWord']; // pdfToWord uses Python script
+    const pythonWordTool = ['pdfToWord']; // pdfToWord uses Python script
 
     switch (toolId) {
       case 'merge':
@@ -268,11 +261,11 @@ export async function POST(request) {
               throw new Error('Only PDF files are supported for PDF to Word conversion.');
           }
           console.log("Processing PDF to Word using Python script (pdf2docx)...");
-          const pythonResult = await processPdfToWordWithPython(filesToProcess[0]);
-          finalProcessedBuffer = pythonResult.processedBuffer;
-          finalOutputMimeType = pythonResult.processedMimeType;
-          finalOutputExtension = path.extname(pythonResult.processedFileName);
-          baseProcessedFileName = path.basename(pythonResult.processedFileName, finalOutputExtension);
+          const pythonWordResult = await processPdfToWordWithPython(filesToProcess[0]);
+          finalProcessedBuffer = pythonWordResult.processedBuffer;
+          finalOutputMimeType = pythonWordResult.processedMimeType;
+          finalOutputExtension = path.extname(pythonWordResult.processedFileName);
+          baseProcessedFileName = path.basename(pythonWordResult.processedFileName, finalOutputExtension);
           break;
 
       case 'wordToPdf': // Not supported by current local libraries
@@ -420,4 +413,3 @@ export async function POST(request) {
     }
   }
 }
-

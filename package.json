@@ -11,8 +11,8 @@
   "dependencies": {
     "@pdfme/converter": "^5.4.0",
     "@pdfme/manipulator": "^5.4.0",
-    "canvas": "^2.11.2",
     "archiver": "^7.0.1",
+    "canvas": "^2.11.2",
     "child-process": "^1.0.2",
     "compress-pdf": "^0.5.4",
     "formidable": "^3.5.4",
