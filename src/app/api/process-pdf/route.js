@@ -218,6 +218,15 @@ export async function POST(request) {
         await fs.mkdir(outputPdfDir, { recursive: true });
         const outputPdfPath = path.join(outputPdfDir, `${path.basename(filesToProcess[0].originalFilename, path.extname(filesToProcess[0].originalFilename))}_compressed.pdf`);
 
+        // IMPORTANT KEY CHANGE: Create the output directory recursively
+        try {
+            await fs.mkdir(outputDir, { recursive: true });
+            console.log(`Ensured output directory exists: ${outputDir}`);
+        } catch (dirError) {
+            console.error(`Error creating output directory ${outputDir}:`, dirError);
+            return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500 });
+        }
+
         try {
           const command = `npx compress-pdf --file "${inputPdfPath}" --output "${outputPdfPath}"`;
           console.log(`Executing command: ${command}`);
