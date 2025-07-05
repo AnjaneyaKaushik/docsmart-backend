@@ -220,7 +220,7 @@ export async function POST(request) {
 
         // IMPORTANT KEY CHANGE: Create the output directory recursively
         try {
-            await fs.mkdir(outputDir, { recursive: true });
+            await fs.mkdir(outputPdfDir, { recursive: true });
             console.log(`Ensured output directory exists: ${outputDir}`);
         } catch (dirError) {
             console.error(`Error creating output directory ${outputDir}:`, dirError);
