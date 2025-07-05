@@ -1,7 +1,7 @@
 services:
   - type: web
     name: docsmart-backend
-    env: node
+    env: node           # ✅ Tells Render this is a Node.js app
     plan: free
     buildCommand: |
       apt-get update && apt-get install -y \
