@@ -21,7 +21,7 @@ export const fileNameToIdMap = globalThis[FILE_NAME_TO_ID_MAP_KEY];
 
 
 // Configuration for cleanup
-const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const CLEANUP_INTERVAL = 10 * 60 * 1000; // 10 minutes (updated from 5 minutes)
 
 // Function to clean up expired files from the cache and disk
 function cleanupExpiredFiles() {
@@ -41,10 +41,11 @@ function cleanupExpiredFiles() {
 
 // Start cleanup periodically. Ensure it only runs once globally.
 export function startCleanupService() {
-  if (!globalThis[CLEANUP_INTERVAL_ID_KEY]) { // Only start if not already running globally
-    globalThis[CLEANUP_INTERVAL_ID_KEY] = setInterval(cleanupExpiredFiles, CLEANUP_INTERVAL);
+  if (!globalThis[CLEANUP_INTERVAL_ID_KEY]) { 
+    const intervalId = setInterval(cleanupExpiredFiles, CLEANUP_INTERVAL);
+    globalThis[CLEANUP_INTERVAL_ID_KEY] = intervalId;
+    // Also run immediately on start for any files that might have expired
+    cleanupExpiredFiles(); 
+    console.log('File cleanup service started with 10-minute interval.');
   }
 }
-
-// Ensure the cleanup service starts when this module is imported.
-startCleanupService();
