@@ -1,46 +1,39 @@
 // src/app/api/process-pdf/route.js
 
-import fs from 'fs/promises'; // For reading/writing temporary files
+import fs from 'fs/promises';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid'; // For generating unique IDs
-import archiver from 'archiver'; // For zipping multiple files
-import { exec, spawn } from 'child_process'; // For executing shell commands and Python scripts
-import os from 'os'; // For os.tmpdir() to create temporary directories
+import { v4 as uuidv4 } from 'uuid';
+import archiver from 'archiver';
+import { exec, spawn } from 'child_process';
+import os from 'os';
 
-// Import the shared cache and cleanup service from src/lib/fileCache.js
 import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
 
-// Import @pdfme libraries:
-import { img2pdf, pdf2img } from '@pdfme/converter'; // Re-importing @pdfme/converter
+import { img2pdf, pdf2img } from '@pdfme/converter';
 import { merge, split, rotate } from '@pdfme/manipulator';
 
-// Import PDFDocument from pdf-lib (still useful for general PDF operations like compression)
+import { sign } from 'pdf-signer';
 
-// Ensure cleanup service is started (important for serverless functions)
 startCleanupService();
 
-// IMPORTANT: Configuration for App Router API routes.
-export const dynamic = 'force-dynamic'; // Ensures the route is not cached
-export const runtime = 'nodejs'; // Essential for using Node.js APIs like 'fs'
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
-// --- Helper function to save file from FormDataEntryValue (File) ---
 async function saveFileLocally(file) {
-  const bytes = await file.arrayBuffer(); // Read file content as ArrayBuffer
-  const buffer = Buffer.from(bytes);      // Convert to Node.js Buffer
+  const bytes = await file.arrayBuffer();
+  const buffer = Buffer.from(bytes);      
 
   const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
   const extension = path.extname(file.name);
   const baseName = path.basename(file.name, extension);
-  const filename = `${baseName}-${uniqueSuffix}${extension}`; // Create unique temp filename
-  const filepath = path.join(process.cwd(), 'tmp', filename); // Path in /tmp directory
+  const filename = `${baseName}-${uniqueSuffix}${extension}`;
+  const filepath = path.join(os.tmpdir(), filename);
 
-  // Ensure 'tmp' directory exists (critical for Vercel's /tmp)
   await fs.mkdir(path.dirname(filepath), { recursive: true });
-  await fs.writeFile(filepath, buffer); // Write file to disk
+  await fs.writeFile(filepath, buffer);
   return { filepath, originalFilename: file.name, mimetype: file.type, name: file.name, arrayBuffer: bytes };
 }
 
-// --- Helper function to process PDF to Word using Python script (pdf2docx) ---
 async function processPdfToWordWithPython(file) {
   const uniqueId = uuidv4();
   const outputDir = path.join(os.tmpdir(), `pdf_word_py_output_${uniqueId}`);
@@ -68,7 +61,7 @@ async function processPdfToWordWithPython(file) {
       if (code === 0) {
         try {
           const processedBuffer = await fs.readFile(outputFilePath);
-          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error); // Clean up output directory
+          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
           resolve({
             processedBuffer,
             processedFileName: outputFileName,
@@ -91,13 +84,9 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
-// Removed processPdfToJpgWithPython helper function
-// Removed processJpgToPdfWithPython helper function
 
-
-// Main API Route Handler for App Router
 export async function POST(request) {
-  const locallyUploadedInputFiles = []; // To store temp input files for cleanup
+  const locallyUploadedInputFiles = [];
 
   try {
     const formData = await request.formData();
@@ -110,7 +99,7 @@ export async function POST(request) {
         fields[key] = value;
       } else if (value instanceof Blob) {
         const savedFile = await saveFileLocally(value);
-        locallyUploadedInputFiles.push(savedFile.filepath); // Add temp path for cleanup
+        locallyUploadedInputFiles.push(savedFile.filepath);
         filesToProcess.push(savedFile);
       }
     }
@@ -135,12 +124,6 @@ export async function POST(request) {
     let baseProcessedFileName = '';
     let originalInputFileName = filesToProcess[0]?.originalFilename || 'processed_file';
 
-
-    // Define tool categories for routing logic
-    const pdfmeManipulatorTools = ['merge', 'split', 'rotatePdf'];
-    const pdfmeConverterTools = ['jpgToPdf', 'pdfToJpg']; // Re-added for @pdfme/converter
-    const cliCompressTool = ['compress']; // 'compress' uses CLI
-    const pythonWordTool = ['pdfToWord']; // pdfToWord uses Python script
 
     switch (toolId) {
       case 'merge':
@@ -205,7 +188,7 @@ export async function POST(request) {
         }
         break;
 
-      case 'compress': // Using CLI compress-pdf
+      case 'compress':
         if (filesToProcess.length !== 1) {
           throw new Error('Compress PDF requires exactly one file.');
         }
@@ -213,14 +196,12 @@ export async function POST(request) {
           throw new Error('Only PDF files are supported for compression.');
         }
         console.log("Processing compress using npx compress-pdf CLI...");
-        const inputPdfPath = filesToProcess[0].filepath; // Path to the uploaded file
+        const inputPdfPath = filesToProcess[0].filepath;
 
-        // Define the output directory and file path
-        const compressOutputUniqueDir = path.join(process.cwd(), 'tmp', 'compressed_output', uuidv4()); // Unique output dir
+        const compressOutputUniqueDir = path.join(os.tmpdir(), 'compressed_output', uuidv4());
         const compressOutputFileName = `${path.basename(filesToProcess[0].originalFilename, path.extname(filesToProcess[0].originalFilename))}_compressed.pdf`;
         const compressOutputFilePath = path.join(compressOutputUniqueDir, compressOutputFileName);
 
-        // --- FIX START: Ensure output directory is created (no redundant try-catch) ---
         try {
             await fs.mkdir(compressOutputUniqueDir, { recursive: true });
             console.log(`Ensured output directory exists for compress: ${compressOutputUniqueDir}`);
@@ -228,10 +209,8 @@ export async function POST(request) {
             console.error(`Error creating output directory ${compressOutputUniqueDir}:`, dirError);
             return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500 });
         }
-        // --- FIX END ---
 
         try {
-          // Use the correctly defined output path in the command
           const command = `npx compress-pdf --file "${inputPdfPath}" --output "${compressOutputFilePath}"`;
           console.log(`Executing command: ${command}`);
 
@@ -262,18 +241,15 @@ export async function POST(request) {
         finalOutputExtension = '.pdf';
         baseProcessedFileName = path.basename(compressOutputFileName, finalOutputExtension); 
 
-        // --- FIX START: Corrected cleanup logic for compress tool ---
         try {
-            // Clean up the unique output directory (and its content)
             await fs.rm(compressOutputUniqueDir, { recursive: true, force: true });
             console.log(`Cleaned up temporary compressed output directory: ${compressOutputUniqueDir}`);
         } catch (cleanupDirError) {
             console.warn(`Could not clean up temporary compressed output directory ${compressOutputUniqueDir}:`, cleanupDirError);
         }
-        // --- FIX END ---
         break;
 
-      case 'pdfToWord': // Using Python script (pdf2docx)
+      case 'pdfToWord':
           if (filesToProcess.length !== 1) {
               throw new Error('PDF to Word conversion requires exactly one PDF file.');
           }
@@ -288,7 +264,7 @@ export async function POST(request) {
           baseProcessedFileName = path.basename(pythonWordResult.processedFileName, finalOutputExtension);
           break;
 
-      case 'wordToPdf': // Not supported by current local libraries
+      case 'wordToPdf':
           return new Response(JSON.stringify({
             success: false,
             message: `${toolId} conversion is not currently supported by this backend version.`,
@@ -297,7 +273,7 @@ export async function POST(request) {
             headers: { 'Content-Type': 'application/json' },
           });
 
-      case 'jpgToPdf': // Using @pdfme/converter
+      case 'jpgToPdf':
           if (filesToProcess.length === 0) {
               throw new Error('JPG to PDF requires at least one image file.');
           }
@@ -313,7 +289,7 @@ export async function POST(request) {
           baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_converted`;
           break;
 
-      case 'pdfToJpg': // Using @pdfme/converter
+      case 'pdfToJpg':
           if (filesToProcess.length !== 1) {
               throw new Error('PDF to JPG requires exactly one PDF file.');
           }
@@ -323,8 +299,8 @@ export async function POST(request) {
           console.log("Processing PDF to JPG using @pdfme/converter...");
           const pdfToImg = filesToProcess[0].arrayBuffer;
           const images = await pdf2img(pdfToImg, {
-              imageType: 'jpeg', // Specify JPG output
-              scale: 1, // 1:1 scale, adjust for higher/lower resolution
+              imageType: 'jpeg',
+              scale: 1,
           });
 
           if (images.length === 0) {
@@ -354,7 +330,7 @@ export async function POST(request) {
           }
           break;
 
-      case 'rotatePdf': // Using @pdfme/manipulator
+      case 'rotatePdf':
           if (filesToProcess.length !== 1) {
             throw new Error('Rotate PDF requires exactly one file.');
           }
@@ -374,6 +350,71 @@ export async function POST(request) {
           baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_rotated`;
           break;
 
+      case 'signPdf':
+          if (filesToProcess.length !== 1) {
+              throw new Error('Sign PDF requires exactly one PDF file.');
+          }
+          if (filesToProcess[0].mimetype !== 'application/pdf') {
+              throw new Error('Only PDF files are supported for signing.');
+          }
+          console.log("Processing PDF signing using pdf-signer...");
+
+          const p12Filename = process.env.P12_FILENAME;
+          const p12Password = process.env.P12_PASSWORD;
+          // NEW: Get the certificate directory from environment variable
+          const p12CertDirectory = process.env.P12_CERT_DIRECTORY; 
+
+          if (!p12Filename || !p12Password || !p12CertDirectory) {
+              throw new Error('P12_FILENAME, P12_PASSWORD, and P12_CERT_DIRECTORY environment variables must be set for PDF signing.');
+          }
+
+          // Construct the certificate path dynamically
+          const p12FilePath = path.join(p12CertDirectory, p12Filename);
+          
+          let p12Buffer;
+          try {
+              p12Buffer = await fs.readFile(p12FilePath);
+          } catch (fileError) {
+              console.error(`Error reading P12 file: ${fileError.message}`);
+              throw new Error(`Failed to read P12 certificate file from ${p12FilePath}. Ensure it exists and path is correct for the current environment.`);
+          }
+
+          const pdfToSignBuffer = Buffer.from(filesToProcess[0].arrayBuffer);
+
+          const signerName = fields.signerName || 'DocSmart Signer';
+          const reason = fields.reason || 'Document approval';
+          const location = fields.location || 'Remote';
+          const email = fields.email || 'signer@docsmart.com';
+
+          const annotationAppearanceOptions = {
+            signatureCoordinates: { left: 0, bottom: 700, right: 190, top: 860 },
+            signatureDetails: [
+              { value: `Signed by: ${signerName}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 20 } },
+              { value: `Reason: ${reason}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 30 } },
+              { value: `Location: ${location}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 40 } },
+              { value: `Date: ${new Date().toLocaleDateString()}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 50 } },
+            ],
+          };
+
+          const signedPdf = sign(
+            pdfToSignBuffer,
+            p12Buffer,
+            p12Password,
+            {
+              reason,
+              email,
+              location,
+              signerName,
+              annotationAppearanceOptions,
+            }
+          );
+          
+          finalProcessedBuffer = Buffer.from(signedPdf);
+          finalOutputMimeType = 'application/pdf';
+          finalOutputExtension = '.pdf';
+          baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_signed`;
+          break;
+
       default:
         throw new Error(`Unsupported tool: ${toolId}`);
     }
@@ -385,7 +426,7 @@ export async function POST(request) {
     const suggestedFileName = `${baseProcessedFileName}${finalOutputExtension}`;
 
     const uniqueFileId = uuidv4();
-    const localDownloadDir = path.join(process.cwd(), 'tmp', 'processed_downloads');
+    const localDownloadDir = path.join(os.tmpdir(), 'processed_downloads');
     await fs.mkdir(localDownloadDir, { recursive: true });
     const localFilePath = path.join(localDownloadDir, uniqueFileId + finalOutputExtension);
 
@@ -401,7 +442,7 @@ export async function POST(request) {
       fileName: suggestedFileName,
       mimeType: finalOutputMimeType,
       timestamp: Date.now(),
-      deleteAt: Date.now() + (10 * 60 * 1000), // 10 minutes for cleanup
+      deleteAt: Date.now() + (10 * 60 * 1000),
     };
     processedFilesCache.set(uniqueFileId, fileCacheEntry);
 
