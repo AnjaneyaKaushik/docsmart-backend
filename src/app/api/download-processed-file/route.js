@@ -5,6 +5,22 @@ import { processedFilesCache } from '@/lib/fileCache'; // Import the cache
 export const dynamic = 'force-dynamic'; // Ensures the route is not cached
 export const runtime = 'nodejs'; // Essential for using Node.js APIs like 'fs'
 
+// --- CORS Headers Definition ---
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+// --- End CORS Headers Definition ---
+
+// --- OPTIONS handler for preflight requests ---
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: corsHeaders,
+  });
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const fileId = searchParams.get('id');
@@ -12,7 +28,7 @@ export async function GET(request) {
   if (!fileId) {
     return new Response(JSON.stringify({ success: false, message: 'File ID is missing.' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
     });
   }
 
@@ -21,7 +37,7 @@ export async function GET(request) {
   if (!fileEntry) {
     return new Response(JSON.stringify({ success: false, message: 'File not found or has expired.' }), {
       status: 404,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
     });
   }
 
@@ -48,22 +64,25 @@ export async function GET(request) {
     }
     // --- END MODIFICATION ---
 
+    // Combine standard headers with CORS headers
+    const responseHeaders = {
+      'Content-Type': fileEntry.mimeType,
+      'Content-Disposition': `attachment; filename="${fileEntry.fileName}"`,
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate', // Prevent caching
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      ...corsHeaders // <--- Added CORS headers here
+    };
+
     return new Response(fileBuffer, {
       status: 200,
-      headers: {
-        'Content-Type': fileEntry.mimeType,
-        'Content-Disposition': `attachment; filename="${fileEntry.fileName}"`,
-        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate', // Prevent caching
-        'Pragma': 'no-cache',
-        'Expires': '0',
-      },
+      headers: responseHeaders,
     });
   } catch (error) {
     console.error(`Error serving file ${fileId}:`, error);
     return new Response(JSON.stringify({ success: false, message: `Server error: ${error.message}` }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
     });
   }
-}
-    
+}  
