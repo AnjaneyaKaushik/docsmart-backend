@@ -12,12 +12,23 @@ import { processedFilesCache, startCleanupService } from '@/lib/fileCache';
 import { img2pdf, pdf2img } from '@pdfme/converter';
 import { merge, split, rotate } from '@pdfme/manipulator';
 
-import { sign } from 'pdf-signer';
+// REMOVED: import { sign } from 'pdf-signer';
 
 startCleanupService();
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+
+// --- CORS Headers Definition ---
+// This allows requests from any origin during development/testing.
+// For production, you might want to specify your exact frontend origin.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*', // Allows all origins
+  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', // Methods allowed
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization', // Headers allowed
+};
+// --- End CORS Headers Definition ---
+
 
 async function saveFileLocally(file) {
   const bytes = await file.arrayBuffer();
@@ -84,6 +95,13 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
+// --- Add an OPTIONS handler for preflight requests ---
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: corsHeaders,
+  });
+}
 
 export async function POST(request) {
   const locallyUploadedInputFiles = [];
@@ -107,7 +125,7 @@ export async function POST(request) {
     if (filesToProcess.length === 0) {
       return new Response(JSON.stringify({ success: false, message: 'No files uploaded.' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
       });
     }
 
@@ -204,10 +222,10 @@ export async function POST(request) {
 
         try {
             await fs.mkdir(compressOutputUniqueDir, { recursive: true });
-            console.log(`Ensured output directory exists for compress: ${compressOutputUniqueDir}`);
+            console.log(`Ensured output directory exists for compress: ${compressOutputOutputUniqueDir}`);
         } catch (dirError) {
             console.error(`Error creating output directory ${compressOutputUniqueDir}:`, dirError);
-            return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500 });
+            return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }); // <--- Add CORS headers here
         }
 
         try {
@@ -270,7 +288,7 @@ export async function POST(request) {
             message: `${toolId} conversion is not currently supported by this backend version.`,
           }), {
             status: 400,
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
           });
 
       case 'jpgToPdf':
@@ -350,70 +368,7 @@ export async function POST(request) {
           baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_rotated`;
           break;
 
-      case 'signPdf':
-          if (filesToProcess.length !== 1) {
-              throw new Error('Sign PDF requires exactly one PDF file.');
-          }
-          if (filesToProcess[0].mimetype !== 'application/pdf') {
-              throw new Error('Only PDF files are supported for signing.');
-          }
-          console.log("Processing PDF signing using pdf-signer...");
-
-          const p12Filename = process.env.P12_FILENAME;
-          const p12Password = process.env.P12_PASSWORD;
-          // NEW: Get the certificate directory from environment variable
-          const p12CertDirectory = process.env.P12_CERT_DIRECTORY; 
-
-          if (!p12Filename || !p12Password || !p12CertDirectory) {
-              throw new Error('P12_FILENAME, P12_PASSWORD, and P12_CERT_DIRECTORY environment variables must be set for PDF signing.');
-          }
-
-          // Construct the certificate path dynamically
-          const p12FilePath = path.join(p12CertDirectory, p12Filename);
-          
-          let p12Buffer;
-          try {
-              p12Buffer = await fs.readFile(p12FilePath);
-          } catch (fileError) {
-              console.error(`Error reading P12 file: ${fileError.message}`);
-              throw new Error(`Failed to read P12 certificate file from ${p12FilePath}. Ensure it exists and path is correct for the current environment.`);
-          }
-
-          const pdfToSignBuffer = Buffer.from(filesToProcess[0].arrayBuffer);
-
-          const signerName = fields.signerName || 'DocSmart Signer';
-          const reason = fields.reason || 'Document approval';
-          const location = fields.location || 'Remote';
-          const email = fields.email || 'signer@docsmart.com';
-
-          const annotationAppearanceOptions = {
-            signatureCoordinates: { left: 0, bottom: 700, right: 190, top: 860 },
-            signatureDetails: [
-              { value: `Signed by: ${signerName}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 20 } },
-              { value: `Reason: ${reason}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 30 } },
-              { value: `Location: ${location}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 40 } },
-              { value: `Date: ${new Date().toLocaleDateString()}`, fontSize: 7, transformOptions: { xPos: 20, yPos: 50 } },
-            ],
-          };
-
-          const signedPdf = sign(
-            pdfToSignBuffer,
-            p12Buffer,
-            p12Password,
-            {
-              reason,
-              email,
-              location,
-              signerName,
-              annotationAppearanceOptions,
-            }
-          );
-          
-          finalProcessedBuffer = Buffer.from(signedPdf);
-          finalOutputMimeType = 'application/pdf';
-          finalOutputExtension = '.pdf';
-          baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_signed`;
-          break;
+      // REMOVED: case 'signPdf': block was here
 
       default:
         throw new Error(`Unsupported tool: ${toolId}`);
@@ -454,14 +409,14 @@ export async function POST(request) {
       mimeType: finalOutputMimeType,
     }), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
     });
 
   } catch (error) {
     console.error('Error during main workflow:', error);
     return new Response(JSON.stringify({ success: false, message: `Server error: ${error.message}` }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
     });
   } finally {
     for (const filePath of locallyUploadedInputFiles) {
