@@ -222,7 +222,7 @@ export async function POST(request) {
 
         try {
             await fs.mkdir(compressOutputUniqueDir, { recursive: true });
-            console.log(`Ensured output directory exists for compress: ${compressOutputOutputUniqueDir}`);
+            console.log(`Ensured output directory exists for compress: ${compressOutputUniqueDir}`);
         } catch (dirError) {
             console.error(`Error creating output directory ${compressOutputUniqueDir}:`, dirError);
             return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }); // <--- Add CORS headers here
