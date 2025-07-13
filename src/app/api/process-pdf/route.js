@@ -95,6 +95,111 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
+// --- NEW FUNCTION: processWordToPdfWithPython ---
+async function processWordToPdfWithPython(file) {
+  const uniqueId = uuidv4();
+  const outputDir = path.join(os.tmpdir(), `word_pdf_py_output_${uniqueId}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  
+  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_converted.pdf`;
+  const outputFilePath = path.join(outputDir, outputFileName);
+
+  return new Promise((resolve, reject) => {
+    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'convert_docx_to_pdf.py');
+
+    const pythonProcess = spawn('python3', [
+      pythonScriptPath,
+      file.filepath,
+      outputFilePath
+    ]);
+
+    let stderrOutput = '';
+    pythonProcess.stderr.on('data', (data) => {
+      stderrOutput += data.toString();
+      console.error(`Python stderr (docx2pdf): ${data}`);
+    });
+
+    pythonProcess.on('close', async (code) => {
+      if (code === 0) {
+        try {
+          const processedBuffer = await fs.readFile(outputFilePath);
+          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+          resolve({
+            processedBuffer,
+            processedFileName: outputFileName,
+            processedMimeType: 'application/pdf'
+          });
+        } catch (readError) {
+          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+          reject(new Error(`Failed to read converted PDF file or clean up: ${readError.message}`));
+        }
+      } else {
+        await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+        reject(new Error(`Word to PDF conversion failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+      }
+    });
+
+    pythonProcess.on('error', (err) => {
+      console.error('Failed to start Python subprocess (docx2pdf):', err);
+      reject(new Error(`Failed to start Python conversion process: ${err.message}. Is Python installed and in PATH, and is MS Word/LibreOffice installed?`));
+    });
+  });
+}
+// --- END NEW FUNCTION ---
+
+// --- NEW FUNCTION: processPdfToTextWithPython ---
+async function processPdfToTextWithPython(file) {
+  const uniqueId = uuidv4();
+  const outputDir = path.join(os.tmpdir(), `pdf_text_py_output_${uniqueId}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  
+  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_extracted.txt`;
+  const outputFilePath = path.join(outputDir, outputFileName);
+
+  return new Promise((resolve, reject) => {
+    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'extract_text_from_pdf.py');
+
+    const pythonProcess = spawn('python3', [
+      pythonScriptPath,
+      file.filepath,
+      outputFilePath
+    ]);
+
+    let stderrOutput = '';
+    pythonProcess.stderr.on('data', (data) => {
+      stderrOutput += data.toString();
+      console.error(`Python stderr (PyPDF2): ${data}`); // Changed from pdfplumber to PyPDF2
+    });
+
+    pythonProcess.on('close', async (code) => {
+      if (code === 0) {
+        try {
+          const processedBuffer = await fs.readFile(outputFilePath);
+          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+          resolve({
+            processedBuffer,
+            processedFileName: outputFileName,
+            processedMimeType: 'text/plain'
+          });
+        } catch (readError) {
+          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+          reject(new Error(`Failed to read extracted text file or clean up: ${readError.message}`));
+        }
+      } else {
+        await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+        reject(new Error(`PDF text extraction failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+      }
+    });
+
+    pythonProcess.on('error', (err) => {
+      console.error('Failed to start Python subprocess (PyPDF2):', err); // Changed from pdfplumber to PyPDF2
+      reject(new Error(`Failed to start Python text extraction process: ${err.message}. Is Python installed and in PATH?`));
+    });
+  });
+}
+// --- END NEW FUNCTION ---
+
+
 // --- Add an OPTIONS handler for preflight requests ---
 export async function OPTIONS() {
   return new Response(null, {
@@ -173,7 +278,7 @@ export async function POST(request) {
             if (parts.length === 1) {
                 return { start: parts[0] - 1, end: parts[0] - 1 };
             } else if (parts.length === 2) {
-                return { start: parts[0] - 1, end: parts[1] - 1 };
+                return { start: parts[0] - 1, end: parts[0] - 1 };
             }
             throw new Error(`Invalid range format: "${range}" for split.`);
         });
@@ -283,13 +388,34 @@ export async function POST(request) {
           break;
 
       case 'wordToPdf':
-          return new Response(JSON.stringify({
-            success: false,
-            message: `${toolId} conversion is not currently supported by this backend version.`,
-          }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
-          });
+          if (filesToProcess.length !== 1) {
+              throw new Error('Word to PDF conversion requires exactly one DOCX file.');
+          }
+          if (!filesToProcess[0].mimetype.includes('officedocument.wordprocessingml.document')) {
+              throw new Error('Only DOCX files are supported for Word to PDF conversion.');
+          }
+          console.log("Processing Word to PDF using Python script (docx2pdf)...");
+          const pythonPdfResult = await processWordToPdfWithPython(filesToProcess[0]);
+          finalProcessedBuffer = pythonPdfResult.processedBuffer;
+          finalOutputMimeType = pythonPdfResult.processedMimeType;
+          finalOutputExtension = path.extname(pythonPdfResult.processedFileName);
+          baseProcessedFileName = path.basename(pythonPdfResult.processedFileName, finalOutputExtension);
+          break;
+
+      case 'extractTextFromPdf': // NEW CASE for extracting text
+          if (filesToProcess.length !== 1) {
+              throw new Error('PDF text extraction requires exactly one PDF file.');
+          }
+          if (filesToProcess[0].mimetype !== 'application/pdf') {
+              throw new Error('Only PDF files are supported for text extraction.');
+          }
+          console.log("Processing PDF text extraction using Python script (PyPDF2)...");
+          const pythonTextResult = await processPdfToTextWithPython(filesToProcess[0]);
+          finalProcessedBuffer = pythonTextResult.processedBuffer;
+          finalOutputMimeType = pythonTextResult.processedMimeType;
+          finalOutputExtension = path.extname(pythonTextResult.processedFileName);
+          baseProcessedFileName = path.basename(pythonTextResult.processedFileName, finalOutputExtension);
+          break;
 
       case 'jpgToPdf':
           if (filesToProcess.length === 0) {
