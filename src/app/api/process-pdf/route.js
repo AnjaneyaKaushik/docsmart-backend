@@ -6,13 +6,14 @@ import { v4 as uuidv4 } from 'uuid';
 import archiver from 'archiver';
 import { exec, spawn } from 'child_process';
 import os from 'os';
+// Import node-qpdf2 functions
+import { encrypt, decrypt } from 'node-qpdf2';
+// REMOVED: import { PDFDocument } from "@peculiar/pdf-lib"; // No longer needed for repairPdf
 
 import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
 
 import { img2pdf, pdf2img } from '@pdfme/converter';
-import { merge, split, rotate } from '@pdfme/manipulator';
-
-// REMOVED: import { sign } from 'pdf-signer';
+import { merge, split, rotate } from '@pdfme/manipulator'; 
 
 startCleanupService();
 
@@ -20,12 +21,10 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 // --- CORS Headers Definition ---
-// This allows requests from any origin during development/testing.
-// For production, you might want to specify your exact frontend origin.
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*', // Allows all origins
-  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', // Methods allowed
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization', // Headers allowed
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 // --- End CORS Headers Definition ---
 
@@ -95,17 +94,17 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
-// --- NEW FUNCTION: processWordToPdfWithPython ---
-async function processWordToPdfWithPython(file) {
+
+async function repairPdfWithPikepdf(file) {
   const uniqueId = uuidv4();
-  const outputDir = path.join(os.tmpdir(), `word_pdf_py_output_${uniqueId}`);
+  const outputDir = path.join(os.tmpdir(), `pikepdf_repair_output_${uniqueId}`);
   await fs.mkdir(outputDir, { recursive: true });
   
-  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_converted.pdf`;
+  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_repaired.pdf`;
   const outputFilePath = path.join(outputDir, outputFileName);
 
   return new Promise((resolve, reject) => {
-    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'convert_docx_to_pdf.py');
+    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'repair_pdf_pikepdf.py');
 
     const pythonProcess = spawn('python3', [
       pythonScriptPath,
@@ -116,7 +115,7 @@ async function processWordToPdfWithPython(file) {
     let stderrOutput = '';
     pythonProcess.stderr.on('data', (data) => {
       stderrOutput += data.toString();
-      console.error(`Python stderr (docx2pdf): ${data}`);
+      console.error(`Python stderr (pikepdf repair): ${data}`);
     });
 
     pythonProcess.on('close', async (code) => {
@@ -131,74 +130,20 @@ async function processWordToPdfWithPython(file) {
           });
         } catch (readError) {
           await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-          reject(new Error(`Failed to read converted PDF file or clean up: ${readError.message}`));
+          reject(new Error(`Failed to read repaired PDF file or clean up: ${readError.message}`));
         }
       } else {
         await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-        reject(new Error(`Word to PDF conversion failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+        reject(new Error(`PDF repair failed (Pikepdf script exited with code ${code}). Stderr: ${stderrOutput}`));
       }
     });
 
     pythonProcess.on('error', (err) => {
-      console.error('Failed to start Python subprocess (docx2pdf):', err);
-      reject(new Error(`Failed to start Python conversion process: ${err.message}. Is Python installed and in PATH, and is MS Word/LibreOffice installed?`));
+      console.error('Failed to start Python subprocess (pikepdf repair):', err);
+      reject(new Error(`Failed to start Python repair process: ${err.message}. Is Python installed and in PATH?`));
     });
   });
 }
-// --- END NEW FUNCTION ---
-
-// --- NEW FUNCTION: processPdfToTextWithPython ---
-async function processPdfToTextWithPython(file) {
-  const uniqueId = uuidv4();
-  const outputDir = path.join(os.tmpdir(), `pdf_text_py_output_${uniqueId}`);
-  await fs.mkdir(outputDir, { recursive: true });
-  
-  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_extracted.txt`;
-  const outputFilePath = path.join(outputDir, outputFileName);
-
-  return new Promise((resolve, reject) => {
-    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'extract_text_from_pdf.py');
-
-    const pythonProcess = spawn('python3', [
-      pythonScriptPath,
-      file.filepath,
-      outputFilePath
-    ]);
-
-    let stderrOutput = '';
-    pythonProcess.stderr.on('data', (data) => {
-      stderrOutput += data.toString();
-      console.error(`Python stderr (PyPDF2): ${data}`); // Changed from pdfplumber to PyPDF2
-    });
-
-    pythonProcess.on('close', async (code) => {
-      if (code === 0) {
-        try {
-          const processedBuffer = await fs.readFile(outputFilePath);
-          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-          resolve({
-            processedBuffer,
-            processedFileName: outputFileName,
-            processedMimeType: 'text/plain'
-          });
-        } catch (readError) {
-          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-          reject(new Error(`Failed to read extracted text file or clean up: ${readError.message}`));
-        }
-      } else {
-        await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-        reject(new Error(`PDF text extraction failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
-      }
-    });
-
-    pythonProcess.on('error', (err) => {
-      console.error('Failed to start Python subprocess (PyPDF2):', err); // Changed from pdfplumber to PyPDF2
-      reject(new Error(`Failed to start Python text extraction process: ${err.message}. Is Python installed and in PATH?`));
-    });
-  });
-}
-// --- END NEW FUNCTION ---
-
 
 // --- Add an OPTIONS handler for preflight requests ---
 export async function OPTIONS() {
@@ -209,28 +154,33 @@ export async function OPTIONS() {
 }
 
 export async function POST(request) {
-  const locallyUploadedInputFiles = [];
+  // Declare qpdfOutputTempDir here so it's always defined
+  let qpdfOutputTempDir = null; 
+  // Use filesToProcess consistently for all uploaded files
+  const filesToProcess = [];
 
   try {
     const formData = await request.formData();
 
     const fields = {};
-    const filesToProcess = [];
+    
 
     for (const [key, value] of formData.entries()) {
       if (typeof value === 'string') {
         fields[key] = value;
       } else if (value instanceof Blob) {
         const savedFile = await saveFileLocally(value);
-        locallyUploadedInputFiles.push(savedFile.filepath);
-        filesToProcess.push(savedFile);
+        filesToProcess.push(savedFile); // Correctly populate filesToProcess
       }
     }
 
-    if (filesToProcess.length === 0) {
+    // Now, process only the first file for tools that expect single input
+    const inputFile = filesToProcess[0]; 
+
+    if (filesToProcess.length === 0) { 
       return new Response(JSON.stringify({ success: false, message: 'No files uploaded.' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
     }
 
@@ -245,8 +195,16 @@ export async function POST(request) {
     let finalOutputMimeType = '';
     let finalOutputExtension = '';
     let baseProcessedFileName = '';
-    let originalInputFileName = filesToProcess[0]?.originalFilename || 'processed_file';
+    let originalInputFileName = inputFile?.originalFilename || (filesToProcess.length > 0 ? filesToProcess[0].originalFilename : 'processed_file');
 
+
+    // Create a unique directory for the output file for qpdf2 operations
+    // This is initialized within the try block after initial checks
+    const uniqueOutputId = uuidv4();
+    qpdfOutputTempDir = path.join(os.tmpdir(), `qpdf_output_${uniqueOutputId}`); // Assign to the outer scoped variable
+    await fs.mkdir(qpdfOutputTempDir, { recursive: true });
+    
+    let qpdfOutputFilePath = ''; // This will be set for qpdf2 operations
 
     switch (toolId) {
       case 'merge':
@@ -330,7 +288,7 @@ export async function POST(request) {
             console.log(`Ensured output directory exists for compress: ${compressOutputUniqueDir}`);
         } catch (dirError) {
             console.error(`Error creating output directory ${compressOutputUniqueDir}:`, dirError);
-            return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } }); // <--- Add CORS headers here
+            return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
         }
 
         try {
@@ -385,36 +343,6 @@ export async function POST(request) {
           finalOutputMimeType = pythonWordResult.processedMimeType;
           finalOutputExtension = path.extname(pythonWordResult.processedFileName);
           baseProcessedFileName = path.basename(pythonWordResult.processedFileName, finalOutputExtension);
-          break;
-
-      case 'wordToPdf':
-          if (filesToProcess.length !== 1) {
-              throw new Error('Word to PDF conversion requires exactly one DOCX file.');
-          }
-          if (!filesToProcess[0].mimetype.includes('officedocument.wordprocessingml.document')) {
-              throw new Error('Only DOCX files are supported for Word to PDF conversion.');
-          }
-          console.log("Processing Word to PDF using Python script (docx2pdf)...");
-          const pythonPdfResult = await processWordToPdfWithPython(filesToProcess[0]);
-          finalProcessedBuffer = pythonPdfResult.processedBuffer;
-          finalOutputMimeType = pythonPdfResult.processedMimeType;
-          finalOutputExtension = path.extname(pythonPdfResult.processedFileName);
-          baseProcessedFileName = path.basename(pythonPdfResult.processedFileName, finalOutputExtension);
-          break;
-
-      case 'extractTextFromPdf': // NEW CASE for extracting text
-          if (filesToProcess.length !== 1) {
-              throw new Error('PDF text extraction requires exactly one PDF file.');
-          }
-          if (filesToProcess[0].mimetype !== 'application/pdf') {
-              throw new Error('Only PDF files are supported for text extraction.');
-          }
-          console.log("Processing PDF text extraction using Python script (PyPDF2)...");
-          const pythonTextResult = await processPdfToTextWithPython(filesToProcess[0]);
-          finalProcessedBuffer = pythonTextResult.processedBuffer;
-          finalOutputMimeType = pythonTextResult.processedMimeType;
-          finalOutputExtension = path.extname(pythonTextResult.processedFileName);
-          baseProcessedFileName = path.basename(pythonTextResult.processedFileName, finalOutputExtension);
           break;
 
       case 'jpgToPdf':
@@ -494,7 +422,118 @@ export async function POST(request) {
           baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_rotated`;
           break;
 
-      // REMOVED: case 'signPdf': block was here
+      case 'protectPdf':
+          if (filesToProcess.length !== 1) {
+              throw new Error('Protect PDF requires exactly one file.');
+          }
+          if (filesToProcess[0].mimetype !== 'application/pdf') {
+              throw new Error('Only PDF files are supported for Protect PDF.');
+          }
+          const userPasswordProtect = fields.password; // This will be the user password for opening
+          
+          if (!userPasswordProtect) {
+              throw new Error('A password must be provided to protect the PDF.');
+          }
+
+          console.log("Processing Protect PDF using node-qpdf2 (encrypt)...");
+          qpdfOutputFilePath = path.join(qpdfOutputTempDir, `${path.basename(inputFile.originalFilename, '.pdf')}_protected.pdf`);
+          
+          try {
+              // node-qpdf2's encrypt function returns void on success, throws on error
+              await encrypt({
+                  input: inputFile.filepath,
+                  output: qpdfOutputFilePath,
+                  password: userPasswordProtect,
+                  // You can add more options here like restrictions, keyLength, ownerPassword
+                  // restrictions: { print: 'low', useAes: 'y' } 
+              });
+
+              // After successful encryption, read the output file
+              finalProcessedBuffer = await fs.readFile(qpdfOutputFilePath);
+              finalOutputMimeType = 'application/pdf';
+              finalOutputExtension = '.pdf';
+              baseProcessedFileName = path.basename(qpdfOutputFilePath, finalOutputExtension);
+          } catch (qpdfError) {
+              console.error('Error protecting PDF with node-qpdf2:', qpdfError);
+              // Log the full error object for better debugging
+              console.error('Full qpdfError object:', qpdfError); 
+              
+              // Improve error message to be more robust
+              let errorMessage = 'PDF protection failed due to an unknown error.';
+              if (qpdfError instanceof Error) {
+                  errorMessage = `PDF protection failed: ${qpdfError.message}`;
+              } else if (typeof qpdfError === 'string') {
+                  errorMessage = `PDF protection failed: ${qpdfError}`;
+              } else if (qpdfError && qpdfError.stderr) { // Check for stderr specifically for child_process errors
+                  errorMessage = `PDF protection failed: ${qpdfError.stderr || qpdfError.stdout || 'Child process error'}`;
+              }
+              throw new Error(errorMessage);
+          }
+          break;
+
+      case 'unlockPdf':
+          if (filesToProcess.length !== 1) {
+              throw new Error('Unlock PDF requires exactly one file.');
+          }
+          if (filesToProcess[0].mimetype !== 'application/pdf') {
+              throw new Error('Only PDF files are supported for Unlock PDF.');
+          }
+          const userPasswordUnlock = fields.password; // This is the password required to unlock/decrypt
+
+          if (!userPasswordUnlock) { // Password might be needed even for owner password removal
+            console.warn('No password provided for unlock. Attempting to unlock without a user password, assuming owner password will be handled or no user password exists.');
+          }
+
+          console.log("Processing Unlock PDF using node-qpdf2 (decrypt)...");
+          qpdfOutputFilePath = path.join(qpdfOutputTempDir, `${path.basename(inputFile.originalFilename, '.pdf')}_unlocked.pdf`);
+          
+          try {
+              await decrypt({
+                  input: inputFile.filepath,
+                  output: qpdfOutputFilePath,
+                  password: userPasswordUnlock || '', // Pass empty string if no password provided
+              });
+              finalProcessedBuffer = await fs.readFile(qpdfOutputFilePath);
+              finalOutputMimeType = 'application/pdf';
+              finalOutputExtension = '.pdf';
+              baseProcessedFileName = path.basename(qpdfOutputFilePath, finalOutputExtension);
+          } catch (qpdfError) {
+              console.error('Error unlocking PDF with node-qpdf2:', qpdfError);
+              console.error('Full qpdfError object:', qpdfError); 
+              let errorMessage = 'PDF unlock failed due to an unknown error.';
+              if (qpdfError instanceof Error) {
+                  errorMessage = `PDF unlock failed: ${qpdfError.message}`;
+              } else if (typeof qpdfError === 'string') {
+                  errorMessage = `PDF unlock failed: ${qpdfError}`;
+              } else if (qpdfError && qpdfError.stderr) {
+                  errorMessage = `PDF unlock failed: ${qpdfError.stderr || qpdfError.stdout || 'Child process error'}`;
+              }
+              throw new Error(errorMessage);
+          }
+          break;
+
+      case 'repairPdf': 
+          if (filesToProcess.length !== 1) {
+              throw new Error('Repair PDF requires exactly one file.');
+          }
+          if (filesToProcess[0].mimetype !== 'application/pdf') {
+              throw new Error('Only PDF files are supported for PDF repair.');
+          }
+          console.log("Processing PDF repair using Pikepdf (Python script)...");
+          try {
+              const pikepdfResult = await repairPdfWithPikepdf(filesToProcess[0]);
+              finalProcessedBuffer = pikepdfResult.processedBuffer;
+              finalOutputMimeType = pikepdfResult.processedMimeType;
+              finalOutputExtension = path.extname(pikepdfResult.processedFileName);
+              baseProcessedFileName = path.basename(pikepdfResult.processedFileName, finalOutputExtension);
+
+              console.log('PDF repair attempt completed with Pikepdf.');
+
+          } catch (repairError) {
+              console.error('Error repairing PDF with Pikepdf:', repairError);
+              throw new Error(`PDF repair failed: ${repairError.message}`);
+          }
+          break;
 
       default:
         throw new Error(`Unsupported tool: ${toolId}`);
@@ -535,22 +574,32 @@ export async function POST(request) {
       mimeType: finalOutputMimeType,
     }), {
       status: 200,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
 
   } catch (error) {
     console.error('Error during main workflow:', error);
     return new Response(JSON.stringify({ success: false, message: `Server error: ${error.message}` }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Add CORS headers here
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   } finally {
-    for (const filePath of locallyUploadedInputFiles) {
+    // Clean up temporary qpdf output directory
+    try {
+      if (qpdfOutputTempDir) { // Check if it was defined/assigned
+        await fs.rm(qpdfOutputTempDir, { recursive: true, force: true });
+        console.log(`Cleaned up temporary node-qpdf2 output directory: ${qpdfOutputTempDir}`);
+      }
+    } catch (cleanupDirError) {
+      console.warn(`Could not clean up temporary node-qpdf2 output directory ${qpdfOutputTempDir}:`, cleanupDirError);
+    }
+    // Clean up initial uploaded files
+    for (const file of filesToProcess) { // Iterate through the file objects
       try {
-        await fs.unlink(filePath);
-        console.log(`Cleaned up temporary input file: ${filePath}`);
+        await fs.unlink(file.filepath); // Access the filepath from the object
+        console.log(`Cleaned up temporary input file: ${file.filepath}`);
       } catch (cleanupError) {
-        console.error(`Error cleaning up temporary input file ${filePath}:`, cleanupError);
+        console.error(`Error cleaning up temporary input file ${file.filepath}:`, cleanupError);
       }
     }
   }
