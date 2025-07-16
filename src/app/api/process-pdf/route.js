@@ -236,7 +236,8 @@ export async function POST(request) {
             if (parts.length === 1) {
                 return { start: parts[0] - 1, end: parts[0] - 1 };
             } else if (parts.length === 2) {
-                return { start: parts[0] - 1, end: parts[0] - 1 };
+                // FIXED: Correctly use parts[1] for the end of the range
+                return { start: parts[0] - 1, end: parts[1] - 1 };
             }
             throw new Error(`Invalid range format: "${range}" for split.`);
         });
