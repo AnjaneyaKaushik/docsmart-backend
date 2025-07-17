@@ -8,7 +8,6 @@ import { exec, spawn } from 'child_process';
 import os from 'os';
 // Import node-qpdf2 functions
 import { encrypt, decrypt } from 'node-qpdf2';
-// REMOVED: import { PDFDocument } from "@peculiar/pdf-lib"; // No longer needed for repairPdf
 
 import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
 
@@ -37,25 +36,27 @@ async function saveFileLocally(file) {
   const extension = path.extname(file.name);
   const baseName = path.basename(file.name, extension);
   const filename = `${baseName}-${uniqueSuffix}${extension}`;
-  const filepath = path.join(os.tmpdir(), filename);
+  const filepath = path.join(os.tmpdir(), filename); // Use os.tmpdir() for temporary files
 
-  await fs.mkdir(path.dirname(filepath), { recursive: true });
   await fs.writeFile(filepath, buffer);
-  return { filepath, originalFilename: file.name, mimetype: file.type, name: file.name, arrayBuffer: bytes };
+  return {
+    filepath,
+    originalFilename: file.name,
+    mimetype: file.type,
+  };
 }
 
 async function processPdfToWordWithPython(file) {
   const uniqueId = uuidv4();
   const outputDir = path.join(os.tmpdir(), `pdf_word_py_output_${uniqueId}`);
   await fs.mkdir(outputDir, { recursive: true });
-  
+
   const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_converted.docx`;
   const outputFilePath = path.join(outputDir, outputFileName);
 
   return new Promise((resolve, reject) => {
     const pythonScriptPath = path.join(process.cwd(), 'scripts', 'convert_pdf_to_docx.py');
-
-    const pythonProcess = spawn('python3', [
+    const pythonProcess = spawn('python3', [ 
       pythonScriptPath,
       file.filepath,
       outputFilePath
@@ -71,15 +72,15 @@ async function processPdfToWordWithPython(file) {
       if (code === 0) {
         try {
           const processedBuffer = await fs.readFile(outputFilePath);
-          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
           resolve({
             processedBuffer,
             processedFileName: outputFileName,
-            processedMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            processedMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            outputFilePath: outputFilePath 
           });
         } catch (readError) {
           await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-          reject(new Error(`Failed to read converted Word file or clean up: ${readError.message}`));
+          reject(new Error(`Failed to read converted DOCX file: ${readError.message}`));
         }
       } else {
         await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
@@ -94,18 +95,66 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
-
-async function repairPdfWithPikepdf(file) {
+async function processDocxToPdfWithPython(file) {
   const uniqueId = uuidv4();
-  const outputDir = path.join(os.tmpdir(), `pikepdf_repair_output_${uniqueId}`);
+  const outputDir = path.join(os.tmpdir(), `docx_pdf_py_output_${uniqueId}`);
   await fs.mkdir(outputDir, { recursive: true });
   
+  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_converted.pdf`;
+  const outputFilePath = path.join(outputDir, outputFileName);
+
+  return new Promise((resolve, reject) => {
+    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'convert_docx_to_pdf.py'); 
+
+    const pythonProcess = spawn('python3', [ 
+      pythonScriptPath,
+      file.filepath,
+      outputFilePath
+    ]);
+
+    let stderrOutput = '';
+    pythonProcess.stderr.on('data', (data) => {
+      stderrOutput += data.toString();
+      console.error(`Python stderr (docx2pdf): ${data}`);
+    });
+
+    pythonProcess.on('close', async (code) => {
+      if (code === 0) {
+        try {
+          const processedBuffer = await fs.readFile(outputFilePath);
+          resolve({
+            processedBuffer,
+            processedFileName: outputFileName,
+            processedMimeType: 'application/pdf',
+            outputFilePath: outputFilePath 
+          });
+        } catch (readError) {
+          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+          reject(new Error(`Failed to read converted PDF file: ${readError.message}`));
+        }
+      } else {
+        await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+        reject(new Error(`DOCX to PDF conversion failed (Python script exited with code ${code}). Stderr: ${stderrOutput}. Ensure LibreOffice is installed and in PATH.`));
+      }
+    });
+
+    pythonProcess.on('error', (err) => {
+      console.error('Failed to start Python subprocess (docx2pdf):', err);
+      reject(new Error(`Failed to start Python conversion process: ${err.message}. Is Python installed and in PATH?`));
+    });
+  });
+}
+
+async function processRepairPdfWithPython(file) {
+  const uniqueId = uuidv4();
+  const outputDir = path.join(os.tmpdir(), `repair_pdf_py_output_${uniqueId}`);
+  await fs.mkdir(outputDir, { recursive: true });
+
   const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_repaired.pdf`;
   const outputFilePath = path.join(outputDir, outputFileName);
 
   return new Promise((resolve, reject) => {
     const pythonScriptPath = path.join(process.cwd(), 'scripts', 'repair_pdf_pikepdf.py');
-
     const pythonProcess = spawn('python3', [
       pythonScriptPath,
       file.filepath,
@@ -115,222 +164,185 @@ async function repairPdfWithPikepdf(file) {
     let stderrOutput = '';
     pythonProcess.stderr.on('data', (data) => {
       stderrOutput += data.toString();
-      console.error(`Python stderr (pikepdf repair): ${data}`);
+      console.error(`Python stderr (pikepdf): ${data}`);
     });
 
     pythonProcess.on('close', async (code) => {
       if (code === 0) {
         try {
           const processedBuffer = await fs.readFile(outputFilePath);
-          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
           resolve({
             processedBuffer,
             processedFileName: outputFileName,
-            processedMimeType: 'application/pdf'
+            processedMimeType: 'application/pdf',
+            outputFilePath: outputFilePath 
           });
         } catch (readError) {
           await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-          reject(new Error(`Failed to read repaired PDF file or clean up: ${readError.message}`));
+          reject(new Error(`Failed to read repaired PDF file: ${readError.message}`));
         }
       } else {
         await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-        reject(new Error(`PDF repair failed (Pikepdf script exited with code ${code}). Stderr: ${stderrOutput}`));
+        reject(new Error(`PDF repair failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
       }
     });
 
     pythonProcess.on('error', (err) => {
-      console.error('Failed to start Python subprocess (pikepdf repair):', err);
+      console.error('Failed to start Python subprocess (pikepdf):', err);
       reject(new Error(`Failed to start Python repair process: ${err.message}. Is Python installed and in PATH?`));
     });
   });
 }
 
-// --- Add an OPTIONS handler for preflight requests ---
-export async function OPTIONS() {
+
+export async function OPTIONS(request) {
   return new Response(null, {
-    status: 200,
+    status: 204,
     headers: corsHeaders,
   });
 }
 
 export async function POST(request) {
-  // Declare qpdfOutputTempDir here so it's always defined
-  let qpdfOutputTempDir = null; 
-  // Use filesToProcess consistently for all uploaded files
-  const filesToProcess = [];
+  let filesToProcess = [];
+  let qpdfOutputTempDir; 
+  let finalOutputFilePathForCache; 
 
   try {
     const formData = await request.formData();
+    const toolId = formData.get('toolId');
+    const files = formData.getAll('files');
+    const options = JSON.parse(formData.get('options') || '{}');
 
-    const fields = {};
-    
-
-    for (const [key, value] of formData.entries()) {
-      if (typeof value === 'string') {
-        fields[key] = value;
-      } else if (value instanceof Blob) {
-        const savedFile = await saveFileLocally(value);
-        filesToProcess.push(savedFile); // Correctly populate filesToProcess
-      }
-    }
-
-    // Now, process only the first file for tools that expect single input
-    const inputFile = filesToProcess[0]; 
-
-    if (filesToProcess.length === 0) { 
-      return new Response(JSON.stringify({ success: false, message: 'No files uploaded.' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-      });
-    }
-
-    const toolId = fields.toolId;
     if (!toolId) {
-      throw new Error('Tool ID not provided.');
+      throw new Error('toolId is required');
+    }
+    if (!files || files.length === 0) {
+      throw new Error('No files uploaded');
     }
 
-    console.log(`Received request for tool: ${toolId}, files count: ${filesToProcess.length}`);
+    for (const file of files) {
+      filesToProcess.push(await saveFileLocally(file));
+    }
 
-    let finalProcessedBuffer = null;
-    let finalOutputMimeType = '';
-    let finalOutputExtension = '';
-    let baseProcessedFileName = '';
-    let originalInputFileName = inputFile?.originalFilename || (filesToProcess.length > 0 ? filesToProcess[0].originalFilename : 'processed_file');
+    let finalProcessedBuffer;
+    let finalOutputMimeType;
+    let finalOutputExtension;
+    let baseProcessedFileName;
+    let tempOutputForCurrentTool; 
 
-
-    // Create a unique directory for the output file for qpdf2 operations
-    // This is initialized within the try block after initial checks
-    const uniqueOutputId = uuidv4();
-    qpdfOutputTempDir = path.join(os.tmpdir(), `qpdf_output_${uniqueOutputId}`); // Assign to the outer scoped variable
-    await fs.mkdir(qpdfOutputTempDir, { recursive: true });
-    
-    let qpdfOutputFilePath = ''; // This will be set for qpdf2 operations
+    if (['protectPdf', 'unlockPdf'].includes(toolId)) {
+        qpdfOutputTempDir = path.join(os.tmpdir(), `qpdf_output_${uuidv4()}`);
+        await fs.mkdir(qpdfOutputTempDir, { recursive: true });
+    }
 
     switch (toolId) {
-      case 'merge':
+      case 'merge': {
         if (filesToProcess.length < 2) {
-          throw new Error('Merge PDF requires at least two files.');
+          throw new Error('Merging requires at least two PDF files.');
         }
-        console.log("Processing merge using @pdfme/manipulator...");
-        const pdfsToMerge = filesToProcess.map(f => f.arrayBuffer);
-        const mergedPdf = await merge(pdfsToMerge);
-        finalProcessedBuffer = Buffer.from(mergedPdf);
+        const pdfBuffers = await Promise.all(filesToProcess.map(f => fs.readFile(f.filepath)));
+        finalProcessedBuffer = await merge(pdfBuffers);
         finalOutputMimeType = 'application/pdf';
         finalOutputExtension = '.pdf';
-        baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_merged`;
+        baseProcessedFileName = 'merged_document';
         break;
-
-      case 'split':
+      }
+      case 'split': {
         if (filesToProcess.length !== 1) {
-          throw new Error('Split PDF requires exactly one file.');
+          throw new Error('Splitting requires exactly one PDF file.');
         }
-        const pdfToSplit = filesToProcess[0].arrayBuffer;
-        const ranges = fields.ranges;
+        const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
+        const { startPage, endPage } = options;
 
-        if (!ranges) {
-            throw new Error('Split tool requires page ranges (e.g., "1-3,5").');
+        if (typeof startPage !== 'number' || typeof endPage !== 'number' || startPage < 0 || endPage < startPage) {
+            throw new Error('Invalid start or end page for splitting.');
         }
 
-        const splitRanges = ranges.split(',').map(range => {
-            const parts = range.split('-').map(Number);
-            if (parts.length === 1) {
-                return { start: parts[0] - 1, end: parts[0] - 1 };
-            } else if (parts.length === 2) {
-                // FIXED: Correctly use parts[1] for the end of the range
-                return { start: parts[0] - 1, end: parts[1] - 1 };
-            }
-            throw new Error(`Invalid range format: "${range}" for split.`);
-        });
+        const splitPdfs = await split(pdfBuffer, [startPage, endPage + 1]); 
+        
+        if (splitPdfs.length === 0) {
+            throw new Error('Splitting resulted in no pages. Check page range.');
+        }
 
-        const splitPdfs = await split(pdfToSplit, splitRanges);
-
-        if (splitPdfs.length > 1) {
+        if (splitPdfs.length === 1) {
+            finalProcessedBuffer = splitPdfs[0];
+            finalOutputMimeType = 'application/pdf';
+            finalOutputExtension = '.pdf';
+            baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_split_p${startPage}-p${endPage}`;
+        } else {
             const archive = archiver('zip', { zlib: { level: 9 } });
-            finalProcessedBuffer = await new Promise((resolve, reject) => {
+            const zipBuffer = await new Promise((resolve, reject) => {
                 const buffers = [];
-                archive.on('data', chunk => buffers.push(chunk));
+                archive.on('data', (data) => buffers.push(data));
                 archive.on('end', () => resolve(Buffer.concat(buffers)));
-                archive.on('error', reject);
+                archive.on('error', (err) => reject(err));
 
                 splitPdfs.forEach((pdfBuffer, index) => {
-                    archive.append(Buffer.from(pdfBuffer), { name: `split_part_${index + 1}.pdf` });
+                    archive.append(pdfBuffer, { name: `page_${startPage + index}.pdf` });
                 });
                 archive.finalize();
             });
+            finalProcessedBuffer = zipBuffer;
             finalOutputMimeType = 'application/zip';
             finalOutputExtension = '.zip';
-            baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_split_parts`;
-        } else if (splitPdfs.length === 1) {
-            finalProcessedBuffer = Buffer.from(splitPdfs[0]);
-            finalOutputMimeType = 'application/pdf';
-            finalOutputExtension = '.pdf';
-            baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_split`;
-        } else {
-            throw new Error('Split tool produced no output PDFs.');
+            baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_split_parts`;
         }
         break;
-
-      case 'compress':
+      }
+      case 'compress': {
         if (filesToProcess.length !== 1) {
-          throw new Error('Compress PDF requires exactly one file.');
+          throw new Error('Compression requires exactly one PDF file.');
         }
-        if (filesToProcess[0].mimetype !== 'application/pdf') {
-          throw new Error('Only PDF files are supported for compression.');
-        }
-        console.log("Processing compress using npx compress-pdf CLI...");
-        const inputPdfPath = filesToProcess[0].filepath;
-
-        const compressOutputUniqueDir = path.join(os.tmpdir(), 'compressed_output', uuidv4());
-        const compressOutputFileName = `${path.basename(filesToProcess[0].originalFilename, path.extname(filesToProcess[0].originalFilename))}_compressed.pdf`;
-        const compressOutputFilePath = path.join(compressOutputUniqueDir, compressOutputFileName);
-
-        try {
-            await fs.mkdir(compressOutputUniqueDir, { recursive: true });
-            console.log(`Ensured output directory exists for compress: ${compressOutputUniqueDir}`);
-        } catch (dirError) {
-            console.error(`Error creating output directory ${compressOutputUniqueDir}:`, dirError);
-            return new Response(JSON.stringify({ success: false, message: `Failed to create output directory: ${dirError.message}` }), { status: 500, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
-        }
-
-        try {
-          const command = `npx compress-pdf --file "${inputPdfPath}" --output "${compressOutputFilePath}"`;
-          console.log(`Executing command: ${command}`);
-
-          await new Promise((resolve, reject) => {
-            exec(command, (error, stdout, stderr) => {
-              if (error) {
-                console.error(`exec error: ${error}`);
-                if (stderr.includes('gs: command not found') || stderr.includes('Ghostscript')) {
-                    return reject(new Error('Ghostscript is not installed or not in PATH. compress-pdf requires Ghostscript.'));
+        const inputPath = filesToProcess[0].filepath;
+        tempOutputForCurrentTool = path.join(os.tmpdir(), `compressed_${uuidv4()}.pdf`);
+        const gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=${tempOutputForCurrentTool} ${inputPath}`;
+        
+        await new Promise((resolve, reject) => {
+            exec(gsCommand, (error, stdout, stderr) => {
+                if (error) {
+                    console.error(`Ghostscript error: ${error.message}`);
+                    console.error(`Ghostscript stderr: ${stderr}`);
+                    return reject(new Error(`PDF compression failed: ${error.message}`));
                 }
-                return reject(new Error(`CLI command failed: ${error.message}\nStderr: ${stderr}`));
-              }
-              if (stderr) {
-                console.warn(`CLI stderr: ${stderr}`);
-              }
-              console.log(`CLI stdout: ${stdout}`);
-              resolve();
+                if (stderr) console.warn(`Ghostscript warning: ${stderr}`);
+                resolve();
             });
-          });
-          console.log(`PDF compressed from ${inputPdfPath} to ${compressOutputFilePath} via CLI.`);
-        } catch (cliError) {
-          console.error('Error during CLI compress-pdf execution:', cliError);
-          throw new Error(`PDF compression failed: ${cliError.message}`);
-        }
-
-        finalProcessedBuffer = await fs.readFile(compressOutputFilePath);
+        });
+        finalProcessedBuffer = await fs.readFile(tempOutputForCurrentTool);
         finalOutputMimeType = 'application/pdf';
         finalOutputExtension = '.pdf';
-        baseProcessedFileName = path.basename(compressOutputFileName, finalOutputExtension); 
-
-        try {
-            await fs.rm(compressOutputUniqueDir, { recursive: true, force: true });
-            console.log(`Cleaned up temporary compressed output directory: ${compressOutputUniqueDir}`);
-        } catch (cleanupDirError) {
-            console.warn(`Could not clean up temporary compressed output directory ${compressOutputUniqueDir}:`, cleanupDirError);
-        }
+        baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_compressed`;
         break;
-
+      }
+      case 'protectPdf': {
+        if (filesToProcess.length !== 1) {
+            throw new Error('Protect PDF requires exactly one PDF file.');
+        }
+        const { password } = options;
+        if (!password) {
+            throw new Error('Password is required to protect the PDF.');
+        }
+        tempOutputForCurrentTool = path.join(qpdfOutputTempDir, `protected_${uuidv4()}.pdf`);
+        await encrypt(filesToProcess[0].filepath, tempOutputForCurrentTool, password);
+        finalProcessedBuffer = await fs.readFile(tempOutputForCurrentTool);
+        finalOutputMimeType = 'application/pdf';
+        finalOutputExtension = '.pdf';
+        baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_protected`;
+        break;
+      }
+      case 'unlockPdf': {
+        if (filesToProcess.length !== 1) {
+            throw new Error('Unlock PDF requires exactly one PDF file.');
+        }
+        const { password } = options;
+        tempOutputForCurrentTool = path.join(qpdfOutputTempDir, `unlocked_${uuidv4()}.pdf`);
+        await decrypt(filesToProcess[0].filepath, tempOutputForCurrentTool, password || null);
+        finalProcessedBuffer = await fs.readFile(tempOutputForCurrentTool);
+        finalOutputMimeType = 'application/pdf';
+        finalOutputExtension = '.pdf';
+        baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_unlocked`;
+        break;
+      }
       case 'pdfToWord':
           if (filesToProcess.length !== 1) {
               throw new Error('PDF to Word conversion requires exactly one PDF file.');
@@ -338,240 +350,204 @@ export async function POST(request) {
           if (filesToProcess[0].mimetype !== 'application/pdf') {
               throw new Error('Only PDF files are supported for PDF to Word conversion.');
           }
-          console.log("Processing PDF to Word using Python script (pdf2docx)...");
+          console.log("Processing PDF to Word using Python script...");
           const pythonWordResult = await processPdfToWordWithPython(filesToProcess[0]);
           finalProcessedBuffer = pythonWordResult.processedBuffer;
           finalOutputMimeType = pythonWordResult.processedMimeType;
           finalOutputExtension = path.extname(pythonWordResult.processedFileName);
           baseProcessedFileName = path.basename(pythonWordResult.processedFileName, finalOutputExtension);
+          tempOutputForCurrentTool = pythonWordResult.outputFilePath; 
           break;
-
-      case 'jpgToPdf':
+      case 'jpgToPdf': {
           if (filesToProcess.length === 0) {
-              throw new Error('JPG to PDF requires at least one image file.');
+              throw new Error('JPG to PDF conversion requires at least one image file.');
           }
-          if (!filesToProcess.every(f => f.mimetype.startsWith('image/'))) {
-              throw new Error('JPG to PDF tool only accepts image files.');
+          const imageMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+          const allImages = filesToProcess.every(file => imageMimeTypes.includes(file.mimetype));
+          if (!allImages) {
+              throw new Error('Only image files (JPG, PNG, GIF, WEBP) are supported for JPG to PDF conversion.');
           }
-          console.log("Processing JPG to PDF using @pdfme/converter...");
-          const imagesToConvert = filesToProcess.map(f => f.arrayBuffer);
-          const imgPdf = await img2pdf(imagesToConvert);
-          finalProcessedBuffer = Buffer.from(imgPdf);
+
+          const imageBuffers = await Promise.all(filesToProcess.map(f => fs.readFile(f.filepath)));
+          finalProcessedBuffer = await img2pdf(imageBuffers);
           finalOutputMimeType = 'application/pdf';
           finalOutputExtension = '.pdf';
-          baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_converted`;
+          baseProcessedFileName = 'images_converted';
           break;
-
-      case 'pdfToJpg':
+      }
+      case 'pdfToJpg': {
           if (filesToProcess.length !== 1) {
-              throw new Error('PDF to JPG requires exactly one PDF file.');
+              throw new Error('PDF to JPG conversion requires exactly one PDF file.');
           }
           if (filesToProcess[0].mimetype !== 'application/pdf') {
               throw new Error('Only PDF files are supported for PDF to JPG conversion.');
           }
-          console.log("Processing PDF to JPG using @pdfme/converter...");
-          const pdfToImg = filesToProcess[0].arrayBuffer;
-          const images = await pdf2img(pdfToImg, {
-              imageType: 'jpeg',
-              scale: 1,
+
+          const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
+          const images = await pdf2img(pdfBuffer); 
+          
+          if (images.length === 0) {
+              throw new Error('Could not extract images from PDF.');
+          }
+
+          const archive = archiver('zip', { zlib: { level: 9 } });
+          const zipBuffer = await new Promise((resolve, reject) => {
+              const buffers = [];
+              archive.on('data', (data) => buffers.push(data));
+              archive.on('end', () => resolve(Buffer.concat(buffers)));
+              archive.on('error', (err) => reject(err));
+
+              images.forEach((imgBuffer, index) => {
+                  archive.append(imgBuffer, { name: `page_${index + 1}.jpg` }); 
+              });
+              archive.finalize();
           });
 
-          if (images.length === 0) {
-              throw new Error('PDF to JPG conversion resulted in no images.');
-          }
-
-          if (images.length > 1) {
-              const archive = archiver('zip', { zlib: { level: 9 } });
-              finalProcessedBuffer = await new Promise((resolve, reject) => {
-                  const buffers = [];
-                  archive.on('data', chunk => buffers.push(chunk));
-                  archive.on('end', () => resolve(Buffer.concat(buffers)));
-                  archive.on('error', reject);
-                  images.forEach((imgBuffer, index) => {
-                      archive.append(Buffer.from(imgBuffer), { name: `page_${index + 1}.jpg` });
-                  });
-                  archive.finalize();
-              });
-              finalOutputMimeType = 'application/zip';
-              finalOutputExtension = '.zip';
-              baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_images`;
-          } else {
-              finalProcessedBuffer = Buffer.from(images[0]);
-              finalOutputMimeType = 'image/jpeg';
-              finalOutputExtension = '.jpg';
-              baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_page_1`;
-          }
+          finalProcessedBuffer = zipBuffer;
+          finalOutputMimeType = 'application/zip';
+          finalOutputExtension = '.zip';
+          baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_images`;
           break;
-
-      case 'rotatePdf':
+      }
+      case 'rotatePdf': {
           if (filesToProcess.length !== 1) {
-            throw new Error('Rotate PDF requires exactly one file.');
+              throw new Error('Rotate PDF requires exactly one PDF file.');
           }
           if (filesToProcess[0].mimetype !== 'application/pdf') {
-              throw new Error('Only PDF files are supported for Rotate PDF conversion.');
+              throw new Error('Only PDF files are supported for PDF rotation.');
           }
-          console.log("Processing rotate using @pdfme/manipulator...");
-          const pdfToRotate = filesToProcess[0].arrayBuffer;
-          const rotateDegrees = parseInt(fields.rotate_value || '0', 10);
-          if (![0, 90, 180, 270, 360].includes(rotateDegrees)) {
-            throw new Error('Rotation degrees must be 0, 90, 180, 270, or 360.');
+          const { angle } = options; 
+          if (![90, 180, 270].includes(angle)) {
+              throw new Error('Invalid rotation angle. Must be 90, 180, or 270.');
           }
-          const rotatedPdf = await rotate(pdfToRotate, rotateDegrees);
-          finalProcessedBuffer = Buffer.from(rotatedPdf);
+
+          const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
+          finalProcessedBuffer = await rotate(pdfBuffer, angle);
           finalOutputMimeType = 'application/pdf';
           finalOutputExtension = '.pdf';
-          baseProcessedFileName = `${path.basename(originalInputFileName, path.extname(originalInputFileName))}_rotated`;
+          baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_rotated`;
           break;
-
-      case 'protectPdf':
+      }
+      case 'repairPdf': {
+        if (filesToProcess.length !== 1) {
+            throw new Error('Repair PDF requires exactly one PDF file.');
+        }
+        if (filesToProcess[0].mimetype !== 'application/pdf') {
+            throw new Error('Only PDF files are supported for PDF repair.');
+        }
+        console.log("Processing PDF repair using Python script (pikepdf)...");
+        const pythonRepairResult = await processRepairPdfWithPython(filesToProcess[0]);
+        finalProcessedBuffer = pythonRepairResult.processedBuffer;
+        finalOutputMimeType = pythonRepairResult.processedMimeType;
+        finalOutputExtension = path.extname(pythonRepairResult.processedFileName);
+        baseProcessedFileName = path.basename(pythonRepairResult.processedFileName, finalOutputExtension);
+        tempOutputForCurrentTool = pythonRepairResult.outputFilePath; 
+        break;
+      }
+      case 'docxToPdf': 
           if (filesToProcess.length !== 1) {
-              throw new Error('Protect PDF requires exactly one file.');
+              throw new Error('DOCX to PDF conversion requires exactly one DOCX file.');
           }
-          if (filesToProcess[0].mimetype !== 'application/pdf') {
-              throw new Error('Only PDF files are supported for Protect PDF.');
+          const docxMimeTypes = [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
+            'application/msword' 
+          ];
+          if (!docxMimeTypes.includes(filesToProcess[0].mimetype)) {
+              throw new Error('Only DOCX/DOC files are supported for DOCX to PDF conversion.');
           }
-          const userPasswordProtect = fields.password; // This will be the user password for opening
-          
-          if (!userPasswordProtect) {
-              throw new Error('A password must be provided to protect the PDF.');
-          }
-
-          console.log("Processing Protect PDF using node-qpdf2 (encrypt)...");
-          qpdfOutputFilePath = path.join(qpdfOutputTempDir, `${path.basename(inputFile.originalFilename, '.pdf')}_protected.pdf`);
-          
-          try {
-              // node-qpdf2's encrypt function returns void on success, throws on error
-              await encrypt({
-                  input: inputFile.filepath,
-                  output: qpdfOutputFilePath,
-                  password: userPasswordProtect,
-                  // You can add more options here like restrictions, keyLength, ownerPassword
-                  // restrictions: { print: 'low', useAes: 'y' } 
-              });
-
-              // After successful encryption, read the output file
-              finalProcessedBuffer = await fs.readFile(qpdfOutputFilePath);
-              finalOutputMimeType = 'application/pdf';
-              finalOutputExtension = '.pdf';
-              baseProcessedFileName = path.basename(qpdfOutputFilePath, finalOutputExtension);
-          } catch (qpdfError) {
-              console.error('Error protecting PDF with node-qpdf2:', qpdfError);
-              // Log the full error object for better debugging
-              console.error('Full qpdfError object:', qpdfError); 
-              
-              // Improve error message to be more robust
-              let errorMessage = 'PDF protection failed due to an unknown error.';
-              if (qpdfError instanceof Error) {
-                  errorMessage = `PDF protection failed: ${qpdfError.message}`;
-              } else if (typeof qpdfError === 'string') {
-                  errorMessage = `PDF protection failed: ${qpdfError}`;
-              } else if (qpdfError && qpdfError.stderr) { // Check for stderr specifically for child_process errors
-                  errorMessage = `PDF protection failed: ${qpdfError.stderr || qpdfError.stdout || 'Child process error'}`;
-              }
-              throw new Error(errorMessage);
-          }
+          console.log("Processing DOCX to PDF using Python script (docx2pdf)...");
+          const pythonPdfResult = await processDocxToPdfWithPython(filesToProcess[0]);
+          finalProcessedBuffer = pythonPdfResult.processedBuffer;
+          finalOutputMimeType = pythonPdfResult.processedMimeType;
+          finalOutputExtension = path.extname(pythonPdfResult.processedFileName);
+          baseProcessedFileName = path.basename(pythonPdfResult.processedFileName, finalOutputExtension);
+          tempOutputForCurrentTool = pythonPdfResult.outputFilePath; 
           break;
+      case 'addPageNumbers': {
+        if (filesToProcess.length !== 1) {
+            throw new Error('Adding page numbers requires exactly one PDF file.');
+        }
+        if (filesToProcess[0].mimetype !== 'application/pdf') {
+            throw new Error('Only PDF files are supported for adding page numbers.');
+        }
 
-      case 'unlockPdf':
-          if (filesToProcess.length !== 1) {
-              throw new Error('Unlock PDF requires exactly one file.');
-          }
-          if (filesToProcess[0].mimetype !== 'application/pdf') {
-              throw new Error('Only PDF files are supported for Unlock PDF.');
-          }
-          const userPasswordUnlock = fields.password; // This is the password required to unlock/decrypt
+        const inputPdfPath = filesToProcess[0].filepath;
+        const uniqueId = uuidv4(); // Not directly used in current Python script but good for temp naming
+        const outputFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_numbered.pdf`;
+        const outputFilePath = path.join(os.tmpdir(), outputFileName);
 
-          if (!userPasswordUnlock) { // Password might be needed even for owner password removal
-            console.warn('No password provided for unlock. Attempting to unlock without a user password, assuming owner password will be handled or no user password exists.');
-          }
+        try {
+            await new Promise((resolve, reject) => {
+                const pythonScriptPath = path.join(process.cwd(), 'scripts', 'add_page_numbers.py');
+                const pythonProcess = spawn('python3', [
+                    pythonScriptPath,
+                    inputPdfPath,
+                    outputFilePath
+                ]);
 
-          console.log("Processing Unlock PDF using node-qpdf2 (decrypt)...");
-          qpdfOutputFilePath = path.join(qpdfOutputTempDir, `${path.basename(inputFile.originalFilename, '.pdf')}_unlocked.pdf`);
-          
-          try {
-              await decrypt({
-                  input: inputFile.filepath,
-                  output: qpdfOutputFilePath,
-                  password: userPasswordUnlock || '', // Pass empty string if no password provided
-              });
-              finalProcessedBuffer = await fs.readFile(qpdfOutputFilePath);
-              finalOutputMimeType = 'application/pdf';
-              finalOutputExtension = '.pdf';
-              baseProcessedFileName = path.basename(qpdfOutputFilePath, finalOutputExtension);
-          } catch (qpdfError) {
-              console.error('Error unlocking PDF with node-qpdf2:', qpdfError);
-              console.error('Full qpdfError object:', qpdfError); 
-              let errorMessage = 'PDF unlock failed due to an unknown error.';
-              if (qpdfError instanceof Error) {
-                  errorMessage = `PDF unlock failed: ${qpdfError.message}`;
-              } else if (typeof qpdfError === 'string') {
-                  errorMessage = `PDF unlock failed: ${qpdfError}`;
-              } else if (qpdfError && qpdfError.stderr) {
-                  errorMessage = `PDF unlock failed: ${qpdfError.stderr || qpdfError.stdout || 'Child process error'}`;
-              }
-              throw new Error(errorMessage);
-          }
-          break;
+                let stderrOutput = '';
+                pythonProcess.stderr.on('data', (data) => {
+                    stderrOutput += data.toString();
+                    console.error(`Python stderr (add_page_numbers): ${data}`);
+                });
 
-      case 'repairPdf': 
-          if (filesToProcess.length !== 1) {
-              throw new Error('Repair PDF requires exactly one file.');
-          }
-          if (filesToProcess[0].mimetype !== 'application/pdf') {
-              throw new Error('Only PDF files are supported for PDF repair.');
-          }
-          console.log("Processing PDF repair using Pikepdf (Python script)...");
-          try {
-              const pikepdfResult = await repairPdfWithPikepdf(filesToProcess[0]);
-              finalProcessedBuffer = pikepdfResult.processedBuffer;
-              finalOutputMimeType = pikepdfResult.processedMimeType;
-              finalOutputExtension = path.extname(pikepdfResult.processedFileName);
-              baseProcessedFileName = path.basename(pikepdfResult.processedFileName, finalOutputExtension);
+                pythonProcess.on('close', (code) => {
+                    if (code === 0) {
+                        resolve();
+                    } else {
+                        reject(new Error(`Adding page numbers failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+                    }
+                });
 
-              console.log('PDF repair attempt completed with Pikepdf.');
+                pythonProcess.on('error', (err) => {
+                    console.error('Failed to start Python subprocess (add_page_numbers):', err);
+                    reject(new Error(`Failed to start Python script: ${err.message}. Is Python installed and in PATH?`));
+                });
+            });
 
-          } catch (repairError) {
-              console.error('Error repairing PDF with Pikepdf:', repairError);
-              throw new Error(`PDF repair failed: ${repairError.message}`);
-          }
-          break;
+            finalProcessedBuffer = await fs.readFile(outputFilePath);
+            finalOutputMimeType = 'application/pdf';
+            finalOutputExtension = '.pdf';
+            baseProcessedFileName = path.basename(outputFileName, finalOutputExtension);
+            tempOutputForCurrentTool = outputFilePath;
+
+        } catch (error) {
+            console.error('Error in addPageNumbers:', error);
+            if (outputFilePath && await fs.access(outputFilePath).then(() => true).catch(() => false)) {
+                await fs.unlink(outputFilePath).catch(e => console.error("Error cleaning up failed page number file:", e));
+            }
+            throw error;
+        }
+        break;
+    }
 
       default:
         throw new Error(`Unsupported tool: ${toolId}`);
     }
 
-    if (!finalProcessedBuffer) {
-        throw new Error('Processing failed: No output buffer generated.');
-    }
+    const finalOutputFileName = `${baseProcessedFileName || 'processed_file'}${finalOutputExtension}`;
+    finalOutputFilePathForCache = path.join(os.tmpdir(), `${uuidv4()}_${finalOutputFileName}`); 
 
-    const suggestedFileName = `${baseProcessedFileName}${finalOutputExtension}`;
+    if (tempOutputForCurrentTool) {
+      await fs.rename(tempOutputForCurrentTool, finalOutputFilePathForCache);
+    } else {
+      await fs.writeFile(finalOutputFilePathForCache, finalProcessedBuffer);
+    }
 
     const uniqueFileId = uuidv4();
-    const localDownloadDir = path.join(os.tmpdir(), 'processed_downloads');
-    await fs.mkdir(localDownloadDir, { recursive: true });
-    const localFilePath = path.join(localDownloadDir, uniqueFileId + finalOutputExtension);
-
-    try {
-        await fs.writeFile(localFilePath, finalProcessedBuffer);
-    } catch (writeError) {
-        console.error(`Error writing file to disk: ${writeError}`);
-        throw new Error(`Failed to save processed file locally: ${writeError.message}`);
-    }
-
-    const fileCacheEntry = {
-      filePath: localFilePath,
-      fileName: suggestedFileName,
-      mimeType: finalOutputMimeType,
-      timestamp: Date.now(),
-      deleteAt: Date.now() + (10 * 60 * 1000),
-    };
-    processedFilesCache.set(uniqueFileId, fileCacheEntry);
+    processedFilesCache.set(uniqueFileId, {
+      filePath: finalOutputFilePathForCache, 
+      fileName: finalOutputFileName,         
+      mimeType: finalOutputMimeType,         
+      accessCount: 0                         
+    });
 
     return new Response(JSON.stringify({
       success: true,
+      process: true,
       downloadUrl: `/api/download-processed-file?id=${uniqueFileId}`,
-      originalFileName: originalInputFileName,
-      processedFileName: suggestedFileName,
+      originalFileName: filesToProcess.length === 1 ? filesToProcess[0].originalFilename : null,
+      processedFileName: finalOutputFileName,
       mimeType: finalOutputMimeType,
     }), {
       status: 200,
@@ -585,22 +561,20 @@ export async function POST(request) {
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   } finally {
-    // Clean up temporary qpdf output directory
-    try {
-      if (qpdfOutputTempDir) { // Check if it was defined/assigned
-        await fs.rm(qpdfOutputTempDir, { recursive: true, force: true });
-        console.log(`Cleaned up temporary node-qpdf2 output directory: ${qpdfOutputTempDir}`);
-      }
-    } catch (cleanupDirError) {
-      console.warn(`Could not clean up temporary node-qpdf2 output directory ${qpdfOutputTempDir}:`, cleanupDirError);
-    }
-    // Clean up initial uploaded files
-    for (const file of filesToProcess) { // Iterate through the file objects
+    for (const file of filesToProcess) { 
       try {
-        await fs.unlink(file.filepath); // Access the filepath from the object
+        await fs.unlink(file.filepath); 
         console.log(`Cleaned up temporary input file: ${file.filepath}`);
       } catch (cleanupError) {
         console.error(`Error cleaning up temporary input file ${file.filepath}:`, cleanupError);
+      }
+    }
+    if (qpdfOutputTempDir) { 
+      try {
+        await fs.rm(qpdfOutputTempDir, { recursive: true, force: true });
+        console.log(`Cleaned up temporary node-qpdf2 output directory: ${qpdfOutputTempDir}`);
+      } catch (cleanupDirError) {
+        console.warn(`Could not clean up temporary node-qpdf2 output directory ${qpdfOutputTempDir}:`, cleanupDirError);
       }
     }
   }

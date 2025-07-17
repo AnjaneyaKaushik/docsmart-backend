@@ -1,3 +1,5 @@
 pdf2docx
 pypdf
 pikepdf
+docx2pdf
+reportlab
