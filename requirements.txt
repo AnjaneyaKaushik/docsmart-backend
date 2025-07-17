@@ -3,3 +3,4 @@ pypdf
 pikepdf
 docx2pdf
 reportlab
+subprocess
