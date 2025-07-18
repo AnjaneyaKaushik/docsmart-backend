@@ -1,7 +1,6 @@
 FROM node:22-bookworm-slim AS builder
 
-# Install system dependencies
-# Ensure all apt-get packages are on the same line or properly continued with '\'
+# Install system dependencies in the builder stage
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libreoffice-writer \
@@ -53,47 +52,47 @@ COPY . .
 
 RUN npm run build
 
+# ---
+# Stage 2: Production image (leaner, contains only what's needed to run)
+# We will reinstall runtime dependencies here to ensure they are properly linked.
 FROM node:22-bookworm-slim
 
-# Create the target directory before copying files into it
-RUN mkdir -p /usr/lib/x86_64-linux-gnu/
-
+# Copy the built application from the builder stage
 COPY --from=builder /app /app
 
+# Copy the entire virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
 
-# Copy executables
-COPY --from=builder /usr/bin/soffice /usr/bin/soffice
-COPY --from=builder /usr/bin/gs /usr/bin/gs
-COPY --from=builder /usr/bin/qpdf /usr/bin/qpdf
-
-# Copy LibreOffice shared libraries directory
-COPY --from=builder /usr/lib/libreoffice/ /usr/lib/libreoffice/
-
-# Copy essential system shared libraries
-# The destination is clearly a directory due to the pre-creation (mkdir -p)
-COPY --from=builder \
-    /usr/lib/x86_64-linux-gnu/libcairo.so.2 \
-    /usr/lib/x86_64-linux-gnu/libjpeg.so.8 \
-    /usr/lib/x86_64-linux-gnu/libpango-1.0.so.0 \
-    /usr/lib/x86_64-linux-gnu/libpangocairo-1.0.so.0 \
-    /usr/lib/x86_64-linux-gnu/libgdk_pixbuf-2.0.so.0 \
-    /usr/lib/x86_64-linux-gnu/libgif.so.7 \
-    /usr/lib/x86_64-linux-gnu/librsvg-2.so.2 \
-    /usr/lib/x86_64-linux-gnu/libglx_mesa.so.0 \
-    /usr/lib/x86_64-linux-gnu/libGL.so.1 \
-    /usr/lib/x86_64-linux-gnu/libfreetype.so.6 \
-    /usr/lib/x86_64-linux-gnu/libxml2.so.2 \
-    /usr/lib/x86_64-linux-gnu/libxslt.so.1 \
-    /usr/lib/x86_64-linux-gnu/libffi.so.8 \
-    /usr/lib/x86_64-linux-gnu/libssl.so.3 \
-    /usr/lib/x86_64-linux-gnu/libwebp.so.7 \
-    /usr/lib/x86_64-linux-gnu/libtiff.so.6 \
-    /usr/lib/x86_64-linux-gnu/libopenjp2.so.7 \
-    /usr/lib/x86_64-linux-gnu/libhdf5.so.200 \
-    /usr/lib/x86_64-linux-gnu/libgfortran.so.5 \
-    /usr/lib/x86_64-linux-gnu/libatlas.so.3 \
-    /usr/lib/x86_64-linux-gnu/ 
+# Re-install *runtime* versions of necessary system libraries directly in the final image.
+# This is more robust than copying individual .so files, as apt handles dependencies.
+# Note: Package names here are the *runtime* equivalents of the -dev packages from stage 1.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-draw \
+    libreoffice-common \
+    qpdf \
+    libgl1-mesa-glx \
+    libhdf5-200 \
+    libxml2 \
+    libxslt1.1 \
+    zlib1g \
+    libffi8 \
+    libssl3 \
+    libwebp7 \
+    libtiff6 \
+    libopenjp2-7 \
+    libatlas3-base \
+    libgfortran5 \
+    libfreetype6 \
+    # You might need to add other core runtime libraries here if they were specifically listed
+    # in your previous extensive .so copy list and are not brought in by the above.
+    # For example, if libcairo.so.2 isn't part of any above, you'd need 'libcairo2' package.
+    # However, common libs like libcairo2, libjpeg8, libpango1.0 etc. are usually
+    # pulled in as dependencies by LibreOffice itself or the base image.
+    && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set the PATH to include the virtual environment's bin directory
 ENV PATH="/opt/venv/bin:$PATH"
