@@ -29,7 +29,7 @@ const corsHeaders = {
 
 
 async function saveFileLocally(file) {
-  const bytes = await file.arrayArrayBuffer();
+  const bytes = await file.arrayBuffer(); // CORRECTED: Changed arrayArrayBuffer to arrayBuffer
   const buffer = Buffer.from(bytes);      
 
   const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
