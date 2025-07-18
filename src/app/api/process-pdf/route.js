@@ -29,7 +29,7 @@ const corsHeaders = {
 
 
 async function saveFileLocally(file) {
-  const bytes = await file.arrayBuffer(); // CORRECTED: Changed arrayArrayBuffer to arrayBuffer
+  const bytes = await file.arrayBuffer(); 
   const buffer = Buffer.from(bytes);      
 
   const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -165,6 +165,9 @@ export async function POST(request) {
     const files = formData.getAll('files');
     const options = JSON.parse(formData.get('options') || '{}');
 
+    // Updated Log: Received Request for [toolid], filecount: [count]
+    console.log(`Received Request for ${toolId}, filecount: ${files.length}`);
+
     if (!toolId) {
       throw new Error('toolId is required');
     }
@@ -187,8 +190,12 @@ export async function POST(request) {
         await fs.mkdir(qpdfOutputTempDir, { recursive: true });
     }
 
+    // Log: executing cmds
+    console.log(`Executing commands for tool: ${toolId}`);
+
     switch (toolId) {
       case 'merge': {
+        console.log(`Processing ${toolId} using @pdfme/manipulator (merge)`);
         if (filesToProcess.length < 2) {
           throw new Error('Merging requires at least two PDF files.');
         }
@@ -200,6 +207,7 @@ export async function POST(request) {
         break;
       }
       case 'split': {
+        console.log(`Processing ${toolId} using @pdfme/manipulator (split)`);
         if (filesToProcess.length !== 1) {
           throw new Error('Splitting requires exactly one PDF file.');
         }
@@ -242,21 +250,50 @@ export async function POST(request) {
         break;
       }
       case 'compress': {
+        console.log(`Processing ${toolId} using npx compress-pdf (Ghostscript)`);
         if (filesToProcess.length !== 1) {
           throw new Error('Compression requires exactly one PDF file.');
         }
         const inputPath = filesToProcess[0].filepath;
         tempOutputForCurrentTool = path.join(os.tmpdir(), `compressed_${uuidv4()}.pdf`);
-        const gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=${tempOutputForCurrentTool} ${inputPath}`;
-        
+
+        const {
+            resolution = 'ebook', // Default to 'ebook' if not provided
+            compatibilityLevel,
+            pdfPassword,
+            removePasswordAfterCompression,
+            gsModule = '/usr/bin/gs' // Default to where we installed gs
+        } = options;
+
+        let compressCommand = `npx compress-pdf --file "${inputPath}" --output "${tempOutputForCurrentTool}"`;
+
+        if (resolution) {
+            compressCommand += ` --resolution "${resolution}"`;
+        }
+        if (compatibilityLevel !== undefined) {
+            compressCommand += ` --compatibilityLevel ${compatibilityLevel}`;
+        }
+        if (gsModule) {
+            compressCommand += ` --gsModule "${gsModule}"`;
+        }
+        if (pdfPassword) {
+            compressCommand += ` --pdfPassword "${pdfPassword}"`;
+        }
+        if (removePasswordAfterCompression !== undefined) {
+            compressCommand += ` --removePasswordAfterCompression ${removePasswordAfterCompression}`;
+        }
+
+        console.log(`Executing compress-pdf command: ${compressCommand}`);
+        console.log(`Command being executed: ${compressCommand}`);
+
         await new Promise((resolve, reject) => {
-            exec(gsCommand, (error, stdout, stderr) => {
+            exec(compressCommand, (error, stdout, stderr) => {
                 if (error) {
-                    console.error(`Ghostscript error: ${error.message}`);
-                    console.error(`Ghostscript stderr: ${stderr}`);
+                    console.error(`compress-pdf error: ${error.message}`);
+                    console.error(`compress-pdf stderr: ${stderr}`);
                     return reject(new Error(`PDF compression failed: ${error.message}`));
                 }
-                if (stderr) console.warn(`Ghostscript warning: ${stderr}`);
+                if (stderr) console.warn(`compress-pdf warning: ${stderr}`);
                 resolve();
             });
         });
@@ -267,6 +304,7 @@ export async function POST(request) {
         break;
       }
       case 'protectPdf': {
+        console.log(`Processing ${toolId} using node-qpdf2 (encrypt)`);
         if (filesToProcess.length !== 1) {
             throw new Error('Protect PDF requires exactly one PDF file.');
         }
@@ -283,6 +321,7 @@ export async function POST(request) {
         break;
       }
       case 'unlockPdf': {
+        console.log(`Processing ${toolId} using node-qpdf2 (decrypt)`);
         if (filesToProcess.length !== 1) {
             throw new Error('Unlock PDF requires exactly one PDF file.');
         }
@@ -296,6 +335,7 @@ export async function POST(request) {
         break;
       }
       case 'pdfToWord':
+          console.log(`Processing ${toolId} using Python script (pdf2docx)`);
           if (filesToProcess.length !== 1) {
               throw new Error('PDF to Word conversion requires exactly one PDF file.');
           }
@@ -311,6 +351,7 @@ export async function POST(request) {
           tempOutputForCurrentTool = pythonWordResult.outputFilePath; 
           break;
       case 'jpgToPdf': {
+          console.log(`Processing ${toolId} using @pdfme/converter (img2pdf)`);
           if (filesToProcess.length === 0) {
               throw new Error('JPG to PDF conversion requires at least one image file.');
           }
@@ -330,6 +371,7 @@ export async function POST(request) {
           break;
       }
       case 'pdfToJpg': {
+          console.log(`Processing ${toolId} using @pdfme/converter (pdf2img)`);
           if (filesToProcess.length !== 1) {
               throw new Error('PDF to JPG conversion requires exactly one PDF file.');
           }
@@ -366,6 +408,7 @@ export async function POST(request) {
           break;
       }
       case 'rotatePdf': {
+          console.log(`Processing ${toolId} using @pdfme/manipulator (rotate)`);
           if (filesToProcess.length !== 1) {
               throw new Error('Rotate PDF requires exactly one PDF file.');
           }
@@ -385,6 +428,7 @@ export async function POST(request) {
           break;
       }
       case 'repairPdf': {
+        console.log(`Processing ${toolId} using Python script (pikepdf)`);
         if (filesToProcess.length !== 1) {
             throw new Error('Repair PDF requires exactly one PDF file.');
         }
@@ -401,6 +445,7 @@ export async function POST(request) {
         break;
       }
       case 'addPageNumbers': {
+        console.log(`Processing ${toolId} using Python script (custom)`);
         if (filesToProcess.length !== 1) {
             throw new Error('Adding page numbers requires exactly one PDF file.');
         }
@@ -463,6 +508,7 @@ export async function POST(request) {
     }
 
     const finalOutputFileName = `${baseProcessedFileName || 'processed_file'}${finalOutputExtension}`;
+    // Corrected: uuid2uuid is not a function, should be uuidv4
     finalOutputFilePathForCache = path.join(os.tmpdir(), `${uuidv4()}_${finalOutputFileName}`); 
 
     if (tempOutputForCurrentTool) {
