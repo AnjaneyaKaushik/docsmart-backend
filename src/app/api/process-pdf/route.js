@@ -29,7 +29,7 @@ const corsHeaders = {
 
 
 async function saveFileLocally(file) {
-  const bytes = await file.arrayBuffer(); 
+  const bytes = await file.arrayBuffer();
   const buffer = Buffer.from(bytes);      
 
   const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -95,7 +95,7 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
-// REMOVED: async function processDocxToPdfWithPython(file) { ... }
+// REMOVED: async function processDocxToPdfWithPython(file) { ... } // This function was already removed in a previous step
 
 async function processRepairPdfWithPython(file) {
   const uniqueId = uuidv4();
@@ -165,7 +165,6 @@ export async function POST(request) {
     const files = formData.getAll('files');
     const options = JSON.parse(formData.get('options') || '{}');
 
-    // Updated Log: Received Request for [toolid], filecount: [count]
     console.log(`Received Request for ${toolId}, filecount: ${files.length}`);
 
     if (!toolId) {
@@ -190,7 +189,6 @@ export async function POST(request) {
         await fs.mkdir(qpdfOutputTempDir, { recursive: true });
     }
 
-    // Log: executing cmds
     console.log(`Executing commands for tool: ${toolId}`);
 
     switch (toolId) {
@@ -395,8 +393,9 @@ export async function POST(request) {
               archive.on('end', () => resolve(Buffer.concat(buffers)));
               archive.on('error', (err) => reject(err));
 
-              images.forEach((imgBuffer, index) => {
-                  archive.append(imgBuffer, { name: `page_${index + 1}.jpg` }); 
+              // Convert Uint8Array to Buffer before appending to archiver
+              images.forEach((imgUint8Array, index) => {
+                  archive.append(Buffer.from(imgUint8Array), { name: `page_${index + 1}.jpg` }); 
               });
               archive.finalize();
           });
@@ -444,6 +443,26 @@ export async function POST(request) {
         tempOutputForCurrentTool = pythonRepairResult.outputFilePath; 
         break;
       }
+      case 'docxToPdf': 
+          console.log(`Processing ${toolId} using Python script (docx2pdf)`);
+          if (filesToProcess.length !== 1) {
+              throw new Error('DOCX to PDF conversion requires exactly one DOCX file.');
+          }
+          const docxMimeTypes = [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
+            'application/msword' 
+          ];
+          if (!docxMimeTypes.includes(filesToProcess[0].mimetype)) {
+              throw new Error('Only DOCX/DOC files are supported for DOCX to PDF conversion.');
+          }
+          console.log("Processing DOCX to PDF using Python script (docx2pdf)...");
+          const pythonPdfResult = await processDocxToPdfWithPython(filesToProcess[0]);
+          finalProcessedBuffer = pythonPdfResult.processedBuffer;
+          finalOutputMimeType = pythonPdfResult.processedMimeType;
+          finalOutputExtension = path.extname(pythonPdfResult.processedFileName);
+          baseProcessedFileName = path.basename(pythonPdfResult.processedFileName, finalOutputExtension);
+          tempOutputForCurrentTool = pythonPdfResult.outputFilePath; 
+          break;
       case 'addPageNumbers': {
         console.log(`Processing ${toolId} using Python script (custom)`);
         if (filesToProcess.length !== 1) {
@@ -508,7 +527,6 @@ export async function POST(request) {
     }
 
     const finalOutputFileName = `${baseProcessedFileName || 'processed_file'}${finalOutputExtension}`;
-    // Corrected: uuid2uuid is not a function, should be uuidv4
     finalOutputFilePathForCache = path.join(os.tmpdir(), `${uuidv4()}_${finalOutputFileName}`); 
 
     if (tempOutputForCurrentTool) {
