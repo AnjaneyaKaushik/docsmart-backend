@@ -540,7 +540,9 @@ export async function POST(request) {
       filePath: finalOutputFilePathForCache, 
       fileName: finalOutputFileName,         
       mimeType: finalOutputMimeType,         
-      accessCount: 0                         
+      accessCount: 0,
+      toolId: toolId, // Store the toolId
+      timestamp: Date.now() // Store the current timestamp
     });
 
     return new Response(JSON.stringify({
