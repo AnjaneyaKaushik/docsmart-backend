@@ -44,3 +44,4 @@ render.yaml
 tmp
 processed_downloads
 certificates
+.venv
