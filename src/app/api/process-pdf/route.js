@@ -95,55 +95,7 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
-async function processDocxToPdfWithPython(file) {
-  const uniqueId = uuidv4();
-  const outputDir = path.join(os.tmpdir(), `docx_pdf_py_output_${uniqueId}`);
-  await fs.mkdir(outputDir, { recursive: true });
-  
-  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_converted.pdf`;
-  const outputFilePath = path.join(outputDir, outputFileName);
-
-  return new Promise((resolve, reject) => {
-    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'convert_docx_to_pdf.py'); 
-
-    const pythonProcess = spawn('python3', [ 
-      pythonScriptPath,
-      file.filepath,
-      outputFilePath
-    ]);
-
-    let stderrOutput = '';
-    pythonProcess.stderr.on('data', (data) => {
-      stderrOutput += data.toString();
-      console.error(`Python stderr (docx2pdf): ${data}`);
-    });
-
-    pythonProcess.on('close', async (code) => {
-      if (code === 0) {
-        try {
-          const processedBuffer = await fs.readFile(outputFilePath);
-          resolve({
-            processedBuffer,
-            processedFileName: outputFileName,
-            processedMimeType: 'application/pdf',
-            outputFilePath: outputFilePath 
-          });
-        } catch (readError) {
-          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-          reject(new Error(`Failed to read converted PDF file: ${readError.message}`));
-        }
-      } else {
-        await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
-        reject(new Error(`DOCX to PDF conversion failed (Python script exited with code ${code}). Stderr: ${stderrOutput}. Ensure LibreOffice is installed and in PATH.`));
-      }
-    });
-
-    pythonProcess.on('error', (err) => {
-      console.error('Failed to start Python subprocess (docx2pdf):', err);
-      reject(new Error(`Failed to start Python conversion process: ${err.message}. Is Python installed and in PATH?`));
-    });
-  });
-}
+// REMOVED: async function processDocxToPdfWithPython(file) { ... }
 
 async function processRepairPdfWithPython(file) {
   const uniqueId = uuidv4();
@@ -444,25 +396,6 @@ export async function POST(request) {
         tempOutputForCurrentTool = pythonRepairResult.outputFilePath; 
         break;
       }
-      case 'docxToPdf': 
-          if (filesToProcess.length !== 1) {
-              throw new Error('DOCX to PDF conversion requires exactly one DOCX file.');
-          }
-          const docxMimeTypes = [
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
-            'application/msword' 
-          ];
-          if (!docxMimeTypes.includes(filesToProcess[0].mimetype)) {
-              throw new Error('Only DOCX/DOC files are supported for DOCX to PDF conversion.');
-          }
-          console.log("Processing DOCX to PDF using Python script (docx2pdf)...");
-          const pythonPdfResult = await processDocxToPdfWithPython(filesToProcess[0]);
-          finalProcessedBuffer = pythonPdfResult.processedBuffer;
-          finalOutputMimeType = pythonPdfResult.processedMimeType;
-          finalOutputExtension = path.extname(pythonPdfResult.processedFileName);
-          baseProcessedFileName = path.basename(pythonPdfResult.processedFileName, finalOutputExtension);
-          tempOutputForCurrentTool = pythonPdfResult.outputFilePath; 
-          break;
       case 'addPageNumbers': {
         if (filesToProcess.length !== 1) {
             throw new Error('Adding page numbers requires exactly one PDF file.');
