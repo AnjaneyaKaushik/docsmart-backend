@@ -19,7 +19,7 @@ RUN apt-get update && \
     python3-venv \
     qpdf \
     libgl1-mesa-glx \
-    libhdf5-dev \ 
+    libhdf5-dev \
     libxml2-dev \
     libxslt1-dev \
     zlib1g-dev \
@@ -65,8 +65,6 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Re-install *runtime* versions of necessary system libraries directly in the final image.
 # This is more robust than copying individual .so files, as apt handles dependencies.
-# IMPORTANT: Removed 'libhdf5-200'. Let's see if 'libhdf5-dev' (or a similar common runtime)
-# resolves it, or if it's implicitly pulled by another package like Python's h5py.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libreoffice-writer \
@@ -75,8 +73,7 @@ RUN apt-get update && \
     libreoffice-common \
     qpdf \
     libgl1-mesa-glx \
-    # libhdf5-200 REMOVED: We'll see if the necessary libhdf5.so.200 is brought in
-    # by other dependencies, or we might need to find its exact runtime package.
+    libhdf5-103 \
     libxml2 \
     libxslt1.1 \
     zlib1g \
@@ -88,12 +85,6 @@ RUN apt-get update && \
     libatlas3-base \
     libgfortran5 \
     libfreetype6 \
-    # If the build still fails with a missing libhdf5.so.200, you might need to try:
-    # libhdf5-dev:amd64 or search for the exact runtime package for Bookworm.
-    # A quick search for debian bookworm libhdf5.so.200 suggests 'libhdf5-103' or 'libhdf5-100'.
-    # For 'libhdf5.so.200', it's usually provided by 'libhdf5-200' in newer Debians,
-    # but could be 'libhdf5-103' if it's a version alias. Let's try 'libhdf5-103'.
-    libhdf5-103 \
     && \
     rm -rf /var/lib/apt/lists/*
 
