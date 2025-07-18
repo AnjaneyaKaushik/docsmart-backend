@@ -65,6 +65,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Re-install *runtime* versions of necessary system libraries directly in the final image.
 # This is more robust than copying individual .so files, as apt handles dependencies.
+# Explicitly adding common runtime packages for Pango and Cairo.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libreoffice-writer \
@@ -85,6 +86,9 @@ RUN apt-get update && \
     libatlas3-base \
     libgfortran5 \
     libfreetype6 \
+    # Add explicit runtime packages for Pango and Cairo
+    libpango-1.0-0 \ 
+    libcairo2 \      
     && \
     rm -rf /var/lib/apt/lists/*
 
