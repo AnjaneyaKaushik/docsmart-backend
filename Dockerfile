@@ -1,6 +1,7 @@
 FROM node:22-bookworm-slim AS builder
 
 # Install system dependencies
+# Ensure all apt-get packages are on the same line or properly continued with '\'
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libreoffice-writer \
@@ -16,6 +17,7 @@ RUN apt-get update && \
     ghostscript \
     python3 \
     python3-pip \
+    python3-venv \
     qpdf \
     libgl1-mesa-glx \
     libhdf5-dev \
@@ -41,8 +43,11 @@ RUN npm install
 
 COPY requirements.txt .
 
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install -r requirements.txt --break-system-packages
+# Create a virtual environment and install Python dependencies within it
+RUN python3 -m venv /opt/venv && \
+    . /opt/venv/bin/activate && \
+    pip install --upgrade pip && \
+    pip install -r requirements.txt
 
 COPY . .
 
@@ -50,24 +55,23 @@ RUN npm run build
 
 FROM node:22-bookworm-slim
 
+# Create the target directory before copying files into it
+RUN mkdir -p /usr/lib/x86_64-linux-gnu/
+
 COPY --from=builder /app /app
 
-# Copy executables to /usr/bin/
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy executables
 COPY --from=builder /usr/bin/soffice /usr/bin/soffice
 COPY --from=builder /usr/bin/gs /usr/bin/gs
 COPY --from=builder /usr/bin/qpdf /usr/bin/qpdf
-COPY --from=builder /usr/bin/python3 /usr/bin/python3
-COPY --from=builder /usr/bin/pip3 /usr/bin/pip3
 
 # Copy LibreOffice shared libraries directory
 COPY --from=builder /usr/lib/libreoffice/ /usr/lib/libreoffice/
 
-# --- FIX FOR COPY ERROR START ---
-# Explicitly create the target directory if it might not exist or if Docker is being particular.
-# Then perform the COPY operation. This makes the destination clearly a directory.
-RUN mkdir -p /usr/lib/x86_64-linux-gnu/
-
-# Copy essential system shared libraries (e.g., for Cairo, JPEG, Pango, GIF, SVG, GL)
+# Copy essential system shared libraries
+# The destination is clearly a directory due to the pre-creation (mkdir -p)
 COPY --from=builder \
     /usr/lib/x86_64-linux-gnu/libcairo.so.2 \
     /usr/lib/x86_64-linux-gnu/libjpeg.so.8 \
@@ -90,10 +94,9 @@ COPY --from=builder \
     /usr/lib/x86_64-linux-gnu/libgfortran.so.5 \
     /usr/lib/x86_64-linux-gnu/libatlas.so.3 \
     /usr/lib/x86_64-linux-gnu/ 
-# --- FIX FOR COPY END ---
 
-# Copy Python's dist-packages for runtime
-COPY --from=builder /usr/local/lib/python3.11/dist-packages/ /usr/local/lib/python3.11/dist-packages/
+# Set the PATH to include the virtual environment's bin directory
+ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
