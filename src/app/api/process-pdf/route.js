@@ -29,7 +29,7 @@ const corsHeaders = {
 
 
 async function saveFileLocally(file) {
-  const bytes = await file.arrayBuffer();
+  const bytes = await file.arrayArrayBuffer();
   const buffer = Buffer.from(bytes);      
 
   const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -321,7 +321,9 @@ export async function POST(request) {
           }
 
           const imageBuffers = await Promise.all(filesToProcess.map(f => fs.readFile(f.filepath)));
-          finalProcessedBuffer = await img2pdf(imageBuffers);
+          // Convert Buffer to Uint8Array for img2pdf
+          const imageUint8Arrays = imageBuffers.map(buffer => new Uint8Array(buffer));
+          finalProcessedBuffer = await img2pdf(imageUint8Arrays); // Pass Uint8Array
           finalOutputMimeType = 'application/pdf';
           finalOutputExtension = '.pdf';
           baseProcessedFileName = 'images_converted';
@@ -336,7 +338,9 @@ export async function POST(request) {
           }
 
           const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
-          const images = await pdf2img(pdfBuffer); 
+          // Convert Buffer to Uint8Array for pdf2img
+          const pdfUint8Array = new Uint8Array(pdfBuffer);
+          const images = await pdf2img(pdfUint8Array); // Pass Uint8Array
           
           if (images.length === 0) {
               throw new Error('Could not extract images from PDF.');
