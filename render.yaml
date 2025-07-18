@@ -1,17 +1,17 @@
 services:
   - type: web
     name: docsmart-backend
-    # env: docker is replaced by the presence of dockerfilePath and dockerContext
+    runtime: docker # <--- ADD THIS LINE HERE
     region: oregon # or your preferred region
-    dockerfilePath: ./Dockerfile # <--- Path to your Dockerfile (should be in your repo root)
-    dockerContext: . # <--- Context for the Docker build (usually repo root)
+    dockerfilePath: ./Dockerfile # Path to your Dockerfile (should be in your repo root)
+    dockerContext: . # Context for the Docker build (usually repo root)
     buildFilter:
       paths:
         - package.json
         - package-lock.json
         - requirements.txt
         - render.yaml
-        - Dockerfile # <--- Include Dockerfile in filter
+        - Dockerfile # Include Dockerfile in filter
         - scripts/**
         - src/**
     autoDeploy: true
