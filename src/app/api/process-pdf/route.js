@@ -4,15 +4,13 @@ import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import archiver from 'archiver';
-import { exec, spawn } from 'child_process';
+import { exec, spawn } from 'child_process'; // Keep exec and spawn for other tools
 import os from 'os';
-// Import node-qpdf2 functions
-import { encrypt, decrypt } from 'node-qpdf2';
+
+// Removed PDF-LIB imports as we are moving to Python for security features
+// import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'; 
 
 import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
-
-import { img2pdf, pdf2img } from '@pdfme/converter';
-import { merge, split, rotate } from '@pdfme/manipulator'; 
 
 startCleanupService();
 
@@ -39,6 +37,7 @@ async function saveFileLocally(file) {
   const filepath = path.join(os.tmpdir(), filename); // Use os.tmpdir() for temporary files
 
   await fs.writeFile(filepath, buffer);
+  console.log(`[saveFileLocally] File saved to: ${filepath}`); // Added log
   return {
     filepath,
     originalFilename: file.name,
@@ -94,8 +93,6 @@ async function processPdfToWordWithPython(file) {
     });
   });
 }
-
-// REMOVED: async function processDocxToPdfWithPython(file) { ... } // This function was already removed in a previous step
 
 async function processRepairPdfWithPython(file) {
   const uniqueId = uuidv4();
@@ -156,7 +153,6 @@ export async function OPTIONS(request) {
 
 export async function POST(request) {
   let filesToProcess = [];
-  let qpdfOutputTempDir; 
   let finalOutputFilePathForCache; 
 
   try {
@@ -183,11 +179,6 @@ export async function POST(request) {
     let finalOutputExtension;
     let baseProcessedFileName;
     let tempOutputForCurrentTool; 
-
-    if (['protectPdf', 'unlockPdf'].includes(toolId)) {
-        qpdfOutputTempDir = path.join(os.tmpdir(), `qpdf_output_${uuidv4()}`);
-        await fs.mkdir(qpdfOutputTempDir, { recursive: true });
-    }
 
     console.log(`Executing commands for tool: ${toolId}`);
 
@@ -302,7 +293,7 @@ export async function POST(request) {
         break;
       }
       case 'protectPdf': {
-        console.log(`Processing ${toolId} using node-qpdf2 (encrypt)`);
+        console.log(`Processing ${toolId} using Python script (pikepdf)`);
         if (filesToProcess.length !== 1) {
             throw new Error('Protect PDF requires exactly one PDF file.');
         }
@@ -310,23 +301,101 @@ export async function POST(request) {
         if (!password) {
             throw new Error('Password is required to protect the PDF.');
         }
-        tempOutputForCurrentTool = path.join(qpdfOutputTempDir, `protected_${uuidv4()}.pdf`);
-        await encrypt(filesToProcess[0].filepath, tempOutputForCurrentTool, password);
-        finalProcessedBuffer = await fs.readFile(tempOutputForCurrentTool);
+        const inputPath = filesToProcess[0].filepath;
+        const outputFileName = `protected_${uuidv4()}.pdf`;
+        tempOutputForCurrentTool = path.join(os.tmpdir(), outputFileName);
+
+        try {
+            await new Promise((resolve, reject) => {
+                const pythonScriptPath = path.join(process.cwd(), 'scripts', 'protect_pdf.py');
+                const pythonProcess = spawn('python3', [
+                    pythonScriptPath,
+                    'protect', // Action: protect
+                    inputPath,
+                    tempOutputForCurrentTool,
+                    password
+                ]);
+
+                let stderrOutput = '';
+                pythonProcess.stderr.on('data', (data) => {
+                    stderrOutput += data.toString();
+                    console.error(`Python stderr (protect_pdf.py): ${data}`);
+                });
+
+                pythonProcess.on('close', (code) => {
+                    if (code === 0) {
+                        resolve();
+                    } else {
+                        reject(new Error(`PDF protection failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+                    }
+                });
+
+                pythonProcess.on('error', (err) => {
+                    console.error('Failed to start Python subprocess (protectPdf):', err);
+                    reject(new Error(`Failed to start Python script: ${err.message}. Is Python installed and in PATH?`));
+                });
+            });
+
+            finalProcessedBuffer = await fs.readFile(tempOutputForCurrentTool);
+
+        } catch (error) {
+          console.error(`Python script protect error: ${error.message}`);
+          throw new Error(`PDF protection failed: ${error.message}`);
+        }
+
         finalOutputMimeType = 'application/pdf';
         finalOutputExtension = '.pdf';
         baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_protected`;
         break;
       }
       case 'unlockPdf': {
-        console.log(`Processing ${toolId} using node-qpdf2 (decrypt)`);
+        console.log(`Processing ${toolId} using Python script (pikepdf)`);
         if (filesToProcess.length !== 1) {
             throw new Error('Unlock PDF requires exactly one PDF file.');
         }
         const { password } = options;
-        tempOutputForCurrentTool = path.join(qpdfOutputTempDir, `unlocked_${uuidv4()}.pdf`);
-        await decrypt(filesToProcess[0].filepath, tempOutputForCurrentTool, password || null);
-        finalProcessedBuffer = await fs.readFile(tempOutputForCurrentTool);
+        const inputPath = filesToProcess[0].filepath;
+        const outputFileName = `unlocked_${uuidv4()}.pdf`;
+        tempOutputForCurrentTool = path.join(os.tmpdir(), outputFileName);
+
+        try {
+            await new Promise((resolve, reject) => {
+                const pythonScriptPath = path.join(process.cwd(), 'scripts', 'protect_pdf.py');
+                const pythonProcess = spawn('python3', [
+                    pythonScriptPath,
+                    'unlock', // Action: unlock
+                    inputPath,
+                    tempOutputForCurrentTool,
+                    password || '' // Pass empty string if no password provided
+                ]);
+
+                let stderrOutput = '';
+                pythonProcess.stderr.on('data', (data) => {
+                    stderrOutput += data.toString();
+                    console.error(`Python stderr (protect_pdf.py): ${data}`);
+                });
+
+                pythonProcess.on('close', (code) => {
+                    if (code === 0) {
+                        resolve();
+                    } else {
+                        reject(new Error(`PDF unlock failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+                    }
+                });
+
+                pythonProcess.on('error', (err) => {
+                    console.error('Failed to start Python subprocess (unlockPdf):', err);
+                    reject(new Error(`Failed to start Python script: ${err.message}. Is Python installed and in PATH?`));
+                });
+            });
+
+            finalProcessedBuffer = await fs.readFile(tempOutputForCurrentTool);
+
+        } catch (error) {
+          console.error(`Python script unlock error: ${error.message}`);
+          throw new Error(`PDF unlock failed: ${error.message}. Please ensure the correct password is provided.`);
+        }
+
         finalOutputMimeType = 'application/pdf';
         finalOutputExtension = '.pdf';
         baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_unlocked`;
@@ -536,14 +605,14 @@ export async function POST(request) {
     }
 
     const uniqueFileId = uuidv4();
-    processedFilesCache.set(uniqueFileId, {
+    const cacheEntry = {
       filePath: finalOutputFilePathForCache, 
       fileName: finalOutputFileName,         
       mimeType: finalOutputMimeType,         
-      accessCount: 0,
-      toolId: toolId, // Store the toolId
-      timestamp: Date.now() // Store the current timestamp
-    });
+      accessCount: 0                         
+    };
+    processedFilesCache.set(uniqueFileId, cacheEntry);
+    console.log(`File cached: ${finalOutputFileName}, ID: ${uniqueFileId}, Access Count: ${cacheEntry.accessCount}`); // Log access count
 
     return new Response(JSON.stringify({
       success: true,
@@ -572,13 +641,6 @@ export async function POST(request) {
         console.error(`Error cleaning up temporary input file ${file.filepath}:`, cleanupError);
       }
     }
-    if (qpdfOutputTempDir) { 
-      try {
-        await fs.rm(qpdfOutputTempDir, { recursive: true, force: true });
-        console.log(`Cleaned up temporary node-qpdf2 output directory: ${qpdfOutputTempDir}`);
-      } catch (cleanupDirError) {
-        console.warn(`Could not clean up temporary node-qpdf2 output directory ${qpdfOutputTempDir}:`, cleanupDirError);
-      }
-    }
+    // Removed qpdfOutputTempDir cleanup as hummus-recipe handles its own temp files (or in this case, Python script)
   }
 }
