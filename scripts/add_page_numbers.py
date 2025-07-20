@@ -9,9 +9,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont # Import TTFont
 
 # Define the path to the Arial.ttf file relative to this script
-# Assumes Arial.ttf is in a 'fonts' subdirectory within the 'scripts' directory
-# E.g., your-project-root/scripts/fonts/Arial.ttf
-arial_font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'Arial.ttf')
+# Assumes Arial.ttf is directly in the 'scripts' directory based on your screenshot
+# E.g., your-project-root/scripts/Arial.ttf
+arial_font_path = os.path.join(os.path.dirname(__file__), 'Arial.ttf') # Changed path
 
 # Register Arial font.
 try:
