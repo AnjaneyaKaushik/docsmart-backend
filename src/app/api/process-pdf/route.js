@@ -95,8 +95,6 @@ async function processPdfToWordWithPython(file) {
   });
 }
 
-// REMOVED: async function processDocxToPdfWithPython(file) { ... } // This function was already removed in a previous step
-
 async function processRepairPdfWithPython(file) {
   const uniqueId = uuidv4();
   const outputDir = path.join(os.tmpdir(), `repair_pdf_py_output_${uniqueId}`);
@@ -210,12 +208,25 @@ export async function POST(request) {
           throw new Error('Splitting requires exactly one PDF file.');
         }
         const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
-        const { startPage, endPage } = options;
+        const { pageRange } = options; // Expecting a string like "1-7"
 
-        if (typeof startPage !== 'number' || typeof endPage !== 'number' || startPage < 0 || endPage < startPage) {
-            throw new Error('Invalid start or end page for splitting.');
+        if (!pageRange || typeof pageRange !== 'string') {
+            throw new Error('Page range (e.g., "1-7") is required for splitting.');
         }
 
+        const pageParts = pageRange.split('-').map(Number);
+        if (pageParts.length !== 2 || isNaN(pageParts[0]) || isNaN(pageParts[1])) {
+            throw new Error('Invalid page range format. Please use "start-end" (e.g., "1-7").');
+        }
+
+        const [startPage, endPage] = pageParts;
+
+        if (startPage < 1 || endPage < startPage) { // Pages are 1-indexed for user input
+            throw new Error('Invalid start or end page for splitting. Pages must be positive and end page >= start page.');
+        }
+
+        // @pdfme/manipulator split function is 0-indexed for the second argument (end page is exclusive)
+        // So, if user wants 1-7, we pass [1, 8]
         const splitPdfs = await split(pdfBuffer, [startPage, endPage + 1]); 
         
         if (splitPdfs.length === 0) {
@@ -520,13 +531,14 @@ export async function POST(request) {
             throw error;
         }
         break;
-    }
+      }
 
       default:
         throw new Error(`Unsupported tool: ${toolId}`);
     }
 
-    const finalOutputFileName = `${baseProcessedFileName || 'processed_file'}${finalOutputExtension}`;
+    // Prepend "DocSmart_" to the filename
+    const finalOutputFileName = `DocSmart_${baseProcessedFileName || 'processed_file'}${finalOutputExtension}`;
     finalOutputFilePathForCache = path.join(os.tmpdir(), `${uuidv4()}_${finalOutputFileName}`); 
 
     if (tempOutputForCurrentTool) {

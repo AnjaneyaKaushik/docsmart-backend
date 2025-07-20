@@ -1,17 +1,23 @@
 import sys
 import os
-import tempfile # Import tempfile module
+import tempfile
 from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter # Or whatever page size is appropriate
+from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont # Import TTFont
+from reportlab.pdfbase.ttfonts import TTFont
 
 # Define the path to the Arial.ttf file relative to this script
-# Assumes arial.ttf is directly in the 'scripts' directory based on your screenshot
-# Corrected casing for 'arial.ttf'
-arial_font_path = os.path.join(os.path.dirname(__file__), 'arial.ttf') # Changed path to lowercase 'arial.ttf'
+# Assumes arial.ttf is in a 'fonts' subdirectory within the 'scripts' directory
+arial_font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'arial.ttf') # Changed path
+
+# --- DEBUGGING ADDITION: Check if font file exists ---
+if not os.path.exists(arial_font_path):
+    print(f"DEBUG: Arial font file NOT FOUND at expected path: {arial_font_path}", file=sys.stderr)
+else:
+    print(f"DEBUG: Arial font file FOUND at: {arial_font_path}", file=sys.stderr)
+# --- END DEBUGGING ADDITION ---
 
 # Register Arial font.
 try:
@@ -19,8 +25,6 @@ try:
     print(f"Arial font registered from: {arial_font_path}")
 except Exception as e:
     print(f"Warning: Could not register Arial font from {arial_font_path}. Falling back to Helvetica. Error: {e}", file=sys.stderr)
-    # Fallback to Helvetica if Arial is not found or cannot be registered.
-    # For robustness, you might want to explicitly handle this fallback or ensure font presence.
 
 def add_page_numbers(input_pdf_path, output_pdf_path):
     """
@@ -30,46 +34,34 @@ def add_page_numbers(input_pdf_path, output_pdf_path):
         reader = PdfReader(input_pdf_path)
         writer = PdfWriter()
 
-        # Iterate through each page
         for i, page in enumerate(reader.pages):
-            # Create a temporary PDF for the page number overlay
-            # Use a unique name to avoid conflicts, and ensure it's in a temp directory
             temp_overlay_filename = f"overlay_page_{i}_{os.getpid()}.pdf"
-            # Corrected: Use tempfile.gettempdir() instead of os.tmpdir()
             temp_overlay_path = os.path.join(tempfile.gettempdir(), temp_overlay_filename)
 
-            # Create a canvas for the overlay
-            # Get page dimensions and convert to float for consistent arithmetic
-            page_width = float(page.mediabox.width) # Convert to float
-            page_height = float(page.mediabox.height) # Convert to float
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
 
             c = canvas.Canvas(temp_overlay_path, pagesize=(page_width, page_height))
             
-            # Set font and size. Attempt to use 'Arial', fallback to 'Helvetica' if registration failed.
             try:
-                c.setFont('Arial', 15) # Changed font size to 15
+                c.setFont('Arial', 15)
             except:
-                c.setFont('Helvetica', 15) # Fallback if Arial not found/registered, also set to 15
+                c.setFont('Helvetica', 15)
             
-            # Position the page number at the top right
-            text_x = page_width - 0.5 * inch # 0.5 inch from the right
-            text_y = page_height - 0.5 * inch # 0.5 inch from the top (changed from bottom)
+            text_x = page_width - 0.5 * inch
+            text_y = page_height - 0.5 * inch
 
-            # Draw the string. Changed to display only the number.
-            c.drawString(text_x, text_y, f"{i + 1}") # Removed "Page " prefix
+            c.drawString(text_x, text_y, f"{i + 1}")
             c.save()
 
-            # Merge the overlay with the original page
             overlay_reader = PdfReader(temp_overlay_path)
             overlay_page = overlay_reader.pages[0]
 
             page.merge_page(overlay_page)
             writer.add_page(page)
             
-            # Clean up the temporary overlay file
             os.remove(temp_overlay_path)
 
-        # Write the combined PDF to the output path
         with open(output_pdf_path, "wb") as output_file:
             writer.write(output_file)
         
@@ -80,7 +72,6 @@ def add_page_numbers(input_pdf_path, output_pdf_path):
         sys.exit(1)
 
 if __name__ == "__main__":
-    # The script expects two arguments: input_pdf_path and output_pdf_path
     if len(sys.argv) != 3:
         print("Usage: python add_page_numbers.py <input_pdf_path> <output_pdf_path>", file=sys.stderr)
         sys.exit(1)
