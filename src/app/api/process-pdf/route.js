@@ -7,8 +7,8 @@ import archiver from 'archiver';
 import { exec, spawn } from 'child_process'; // Keep exec and spawn for other tools
 import os from 'os';
 
-// Removed node-qpdf2 imports as we are moving to Python for security features
-// import { encrypt, decrypt } from 'node-qpdf2'; 
+// Removed PDF-LIB imports as we are going back to Python for security features
+// import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'; 
 
 import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
 
@@ -253,37 +253,79 @@ export async function POST(request) {
           throw new Error('Splitting requires exactly one PDF file.');
         }
         const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
-        const { pageRange } = options; // Expecting a string like "1-7"
 
-        if (!pageRange || typeof pageRange !== 'string') {
-            throw new Error('Page range (e.g., "1-7") is required for splitting.');
+        // Debugging logs for pdfBuffer before split
+        console.log(`[DEBUG] split: pdfBuffer type: ${typeof pdfBuffer}`);
+        console.log(`[DEBUG] split: pdfBuffer instanceof Buffer: ${pdfBuffer instanceof Buffer}`);
+        console.log(`[DEBUG] split: pdfBuffer length: ${pdfBuffer.length}`);
+        if (pdfBuffer.length === 0) {
+            throw new Error("Input PDF file is empty or corrupted.");
+        }
+        if (pdfBuffer.length > 0) {
+            console.log(`[DEBUG] split: pdfBuffer first 16 bytes: ${pdfBuffer.toString('hex', 0, 16)}`);
         }
 
-        const pageParts = pageRange.split('-').map(Number);
-        if (pageParts.length !== 2 || isNaN(pageParts[0]) || isNaN(pageParts[1])) {
-            throw new Error('Invalid page range format. Please use "start-end" (e.g., "1-7").');
+        const { pageRange } = options; // Expecting a string like "1-7" or "1-3,5,8-10"
+
+        if (!pageRange || typeof pageRange !== 'string' || pageRange.trim() === '') {
+            throw new Error('Page range (e.g., "1-7" or "1-3,5,8-10") is required for splitting.');
         }
 
-        const [startPage, endPage] = pageParts;
+        const rangesToSplit = [];
+        const individualRanges = pageRange.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
-        if (startPage < 1 || endPage < startPage) { // Pages are 1-indexed for user input
-            throw new Error('Invalid start or end page for splitting. Pages must be positive and end page >= start page.');
+        if (individualRanges.length === 0) {
+            throw new Error('Invalid page range format. Please specify at least one page or range.');
         }
 
-        // @pdfme/manipulator split function is 0-indexed for the second argument (end page is exclusive)
-        // So, if user wants 1-7, we pass [1, 8]
-        const splitPdfs = await split(pdfBuffer, [startPage, endPage + 1]); 
+        for (const rangeStr of individualRanges) {
+            if (rangeStr.includes('-')) {
+                const parts = rangeStr.split('-').map(Number);
+                if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
+                    throw new Error(`Invalid range format "${rangeStr}". Please use "start-end" (e.g., "1-7").`);
+                }
+                const [start, end] = parts;
+                if (start < 1 || end < start) {
+                    throw new Error(`Invalid pages in range "${rangeStr}". Pages must be positive and end page >= start page.`);
+                }
+                // Convert to 0-indexed, inclusive range for @pdfme/manipulator
+                rangesToSplit.push({ start: start - 1, end: end - 1 }); 
+            } else {
+                const pageNum = Number(rangeStr);
+                if (isNaN(pageNum) || pageNum < 1) {
+                    throw new Error(`Invalid page number "${rangeStr}". Page numbers must be positive integers.`);
+                }
+                // Single page as a 0-indexed, inclusive range
+                rangesToSplit.push({ start: pageNum - 1, end: pageNum - 1 }); 
+            }
+        }
+
+        // The @pdfme/manipulator split function expects an array of range objects
+        const splitPdfs = await split(pdfBuffer, rangesToSplit); 
         
+        // NEW DEBUGGING: Log the result of split
+        console.log(`[DEBUG] split: Resulting splitPdfs length: ${splitPdfs.length}`);
+        splitPdfs.forEach((pdfPart, idx) => {
+            console.log(`[DEBUG] split: Part ${idx} type: ${typeof pdfPart}, instanceof Uint8Array: ${pdfPart instanceof Uint8Array}, length: ${pdfPart.length}`);
+            if (pdfPart.length > 0) {
+                console.log(`[DEBUG] split: Part ${idx} first 16 bytes: ${Buffer.from(pdfPart).toString('hex', 0, 16)}`);
+            }
+        });
+
         if (splitPdfs.length === 0) {
-            throw new Error('Splitting resulted in no pages. Check page range.');
+            throw new Error('Splitting resulted in no pages. Check page range and input PDF.');
         }
 
+        // Determine if we should return a single PDF or a ZIP archive
         if (splitPdfs.length === 1) {
-            finalProcessedBuffer = splitPdfs[0];
+            // If only one PDF part was generated (e.g., "1-7" or "3"), return it directly
+            finalProcessedBuffer = splitPdfs[0]; 
             finalOutputMimeType = 'application/pdf';
             finalOutputExtension = '.pdf';
-            baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_split_p${startPage}-p${endPage}`;
+            // Use the original file name with the range appended for single output
+            baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_split_${pageRange.replace(/[^a-zA-Z0-9-,]/g, '_')}`; // Allow comma in filename replacement
         } else {
+            // If multiple PDF parts were generated (e.g., "1-3,5,8-10"), create a ZIP archive
             const archive = archiver('zip', { zlib: { level: 9 } });
             const zipBuffer = await new Promise((resolve, reject) => {
                 const buffers = [];
@@ -291,8 +333,20 @@ export async function POST(request) {
                 archive.on('end', () => resolve(Buffer.concat(buffers)));
                 archive.on('error', (err) => reject(err));
 
-                splitPdfs.forEach((pdfBuffer, index) => {
-                    archive.append(pdfBuffer, { name: `page_${startPage + index}.pdf` });
+                splitPdfs.forEach((pdfUint8Array, index) => {
+                    // Name each PDF in the zip based on its original range or sequential number
+                    let partName = `part_${index + 1}.pdf`;
+                    if (rangesToSplit[index]) {
+                        // Attempt to use the original user-defined range for naming
+                        const originalStart = rangesToSplit[index].start + 1;
+                        const originalEnd = rangesToSplit[index].end + 1;
+                        if (originalStart === originalEnd) {
+                            partName = `page_${originalStart}.pdf`;
+                        } else {
+                            partName = `pages_${originalStart}-${originalEnd}.pdf`;
+                        }
+                    }
+                    archive.append(Buffer.from(pdfUint8Array), { name: partName });
                 });
                 archive.finalize();
             });
