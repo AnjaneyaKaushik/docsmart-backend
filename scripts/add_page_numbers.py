@@ -6,11 +6,11 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.ttfonts import TTFont # Re-import TTFont
 
 # Define the path to the Arial.ttf file relative to this script
 # Assumes arial.ttf is in a 'fonts' subdirectory within the 'scripts' directory
-arial_font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'arial.ttf') # Changed path
+arial_font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'arial.ttf')
 
 # --- DEBUGGING ADDITION: Check if font file exists ---
 if not os.path.exists(arial_font_path):
@@ -19,12 +19,13 @@ else:
     print(f"DEBUG: Arial font file FOUND at: {arial_font_path}", file=sys.stderr)
 # --- END DEBUGGING ADDITION ---
 
-# Register Arial font.
+# Re-add explicit TTFont registration
 try:
     pdfmetrics.registerFont(TTFont('Arial', arial_font_path))
     print(f"Arial font registered from: {arial_font_path}")
 except Exception as e:
     print(f"Warning: Could not register Arial font from {arial_font_path}. Falling back to Helvetica. Error: {e}", file=sys.stderr)
+
 
 def add_page_numbers(input_pdf_path, output_pdf_path):
     """
@@ -45,8 +46,10 @@ def add_page_numbers(input_pdf_path, output_pdf_path):
             
             try:
                 c.setFont('Arial', 15)
-            except:
+                print(f"DEBUG: Successfully set font to Arial for page {i+1}", file=sys.stderr)
+            except Exception as font_e:
                 c.setFont('Helvetica', 15)
+                print(f"DEBUG: Falling back to Helvetica for page {i+1}. Error setting Arial: {font_e}", file=sys.stderr)
             
             text_x = page_width - 0.5 * inch
             text_y = page_height - 0.5 * inch
