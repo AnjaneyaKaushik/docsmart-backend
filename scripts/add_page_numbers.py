@@ -1,74 +1,51 @@
 import sys
-import os
-import tempfile
+import io
 from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.units import inch
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont # Re-import TTFont
-
-# Define the path to the Arial.ttf file relative to this script
-# Assumes arial.ttf is in a 'fonts' subdirectory within the 'scripts' directory
-arial_font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'arial.ttf')
-
-# --- DEBUGGING ADDITION: Check if font file exists ---
-if not os.path.exists(arial_font_path):
-    print(f"DEBUG: Arial font file NOT FOUND at expected path: {arial_font_path}", file=sys.stderr)
-else:
-    print(f"DEBUG: Arial font file FOUND at: {arial_font_path}", file=sys.stderr)
-# --- END DEBUGGING ADDITION ---
-
-# Re-add explicit TTFont registration
-try:
-    pdfmetrics.registerFont(TTFont('Arial', arial_font_path))
-    print(f"Arial font registered from: {arial_font_path}")
-except Exception as e:
-    print(f"Warning: Could not register Arial font from {arial_font_path}. Falling back to Helvetica. Error: {e}", file=sys.stderr)
-
+from reportlab.lib.units import inch
 
 def add_page_numbers(input_pdf_path, output_pdf_path):
     """
-    Adds page numbers to a PDF file.
+    Adds page numbers to each page of a PDF file using Helvetica font.
     """
     try:
         reader = PdfReader(input_pdf_path)
         writer = PdfWriter()
 
         for i, page in enumerate(reader.pages):
-            temp_overlay_filename = f"overlay_page_{i}_{os.getpid()}.pdf"
-            temp_overlay_path = os.path.join(tempfile.gettempdir(), temp_overlay_filename)
-
+            # Create a new PDF with ReportLab for the page number
+            packet = io.BytesIO()
+            # Get the page size from the original PDF
             page_width = float(page.mediabox.width)
             page_height = float(page.mediabox.height)
-
-            c = canvas.Canvas(temp_overlay_path, pagesize=(page_width, page_height))
+            can = canvas.Canvas(packet, pagesize=(page_width, page_height))
             
-            try:
-                c.setFont('Arial', 15)
-                print(f"DEBUG: Successfully set font to Arial for page {i+1}", file=sys.stderr)
-            except Exception as font_e:
-                c.setFont('Helvetica', 15)
-                print(f"DEBUG: Falling back to Helvetica for page {i+1}. Error setting Arial: {font_e}", file=sys.stderr)
+            # Set font to Helvetica (standard and reliable)
+            can.setFont('Helvetica', 10) 
             
-            text_x = page_width - 0.5 * inch
-            text_y = page_height - 0.5 * inch
+            # Position the page number (e.g., bottom right)
+            page_number_text = f"Page {i + 1}"
+            text_width = can.stringWidth(page_number_text, 'Helvetica', 10)
+            
+            # Calculate position for bottom-right corner, with some margin
+            margin = 0.5 * inch # Using ReportLab's inch unit
+            x_position = page_width - text_width - margin
+            y_position = margin
 
-            c.drawString(text_x, text_y, f"{i + 1}")
-            c.save()
+            can.drawString(x_position, y_position, page_number_text)
+            can.save()
 
-            overlay_reader = PdfReader(temp_overlay_path)
-            overlay_page = overlay_reader.pages[0]
-
-            page.merge_page(overlay_page)
+            # Merge the page number PDF with the original page
+            packet.seek(0)
+            number_pdf = PdfReader(packet)
+            page.merge_page(number_pdf.pages[0])
             writer.add_page(page)
-            
-            os.remove(temp_overlay_path)
 
-        with open(output_pdf_path, "wb") as output_file:
-            writer.write(output_file)
-        
-        print(f"Page numbers added successfully to: {output_pdf_path}")
+        with open(output_pdf_path, 'wb') as f:
+            writer.write(f)
+        print(f"Page numbers added successfully: {output_pdf_path}")
 
     except Exception as e:
         print(f"Error adding page numbers: {e}", file=sys.stderr)
@@ -79,8 +56,7 @@ if __name__ == "__main__":
         print("Usage: python add_page_numbers.py <input_pdf_path> <output_pdf_path>", file=sys.stderr)
         sys.exit(1)
 
-    input_pdf_path = sys.argv[1]
-    output_pdf_path = sys.argv[2]
+    input_path = sys.argv[1]
+    output_path = sys.argv[2]
 
-    add_page_numbers(input_pdf_path, output_pdf_path)
-
+    add_page_numbers(input_path, output_path)
