@@ -51,13 +51,12 @@ def add_page_numbers(input_pdf_path, output_pdf_path):
             except:
                 c.setFont('Helvetica', 15) # Fallback if Arial not found/registered, also set to 15
             
-            # Position the page number at the bottom center
-            # Adjust x_pos and y_pos as needed for different placements
-            text_x = page_width / 2
-            text_y = 0.5 * inch # 0.5 inch from the bottom
+            # Position the page number at the top right
+            text_x = page_width - 0.5 * inch # 0.5 inch from the right
+            text_y = page_height - 0.5 * inch # 0.5 inch from the top (changed from bottom)
 
-            # Draw the string. 'c.drawCentredString' can be used for centering.
-            c.drawCentredString(text_x, text_y, f"Page {i + 1}")
+            # Draw the string. Changed to display only the number.
+            c.drawString(text_x, text_y, f"{i + 1}") # Removed "Page " prefix
             c.save()
 
             # Merge the overlay with the original page
@@ -90,3 +89,4 @@ if __name__ == "__main__":
     output_pdf_path = sys.argv[2]
 
     add_page_numbers(input_pdf_path, output_pdf_path)
+
