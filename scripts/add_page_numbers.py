@@ -9,9 +9,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont # Import TTFont
 
 # Define the path to the Arial.ttf file relative to this script
-# Assumes Arial.ttf is directly in the 'scripts' directory based on your screenshot
-# E.g., your-project-root/scripts/Arial.ttf
-arial_font_path = os.path.join(os.path.dirname(__file__), 'Arial.ttf') # Changed path
+# Assumes arial.ttf is directly in the 'scripts' directory based on your screenshot
+# Corrected casing for 'arial.ttf'
+arial_font_path = os.path.join(os.path.dirname(__file__), 'arial.ttf') # Changed path to lowercase 'arial.ttf'
 
 # Register Arial font.
 try:
@@ -39,9 +39,9 @@ def add_page_numbers(input_pdf_path, output_pdf_path):
             temp_overlay_path = os.path.join(tempfile.gettempdir(), temp_overlay_filename)
 
             # Create a canvas for the overlay
-            # Get page dimensions to position text correctly
-            page_width = page.mediabox.width
-            page_height = page.mediabox.height
+            # Get page dimensions and convert to float for consistent arithmetic
+            page_width = float(page.mediabox.width) # Convert to float
+            page_height = float(page.mediabox.height) # Convert to float
 
             c = canvas.Canvas(temp_overlay_path, pagesize=(page_width, page_height))
             
@@ -90,4 +90,3 @@ if __name__ == "__main__":
     output_pdf_path = sys.argv[2]
 
     add_page_numbers(input_pdf_path, output_pdf_path)
-
