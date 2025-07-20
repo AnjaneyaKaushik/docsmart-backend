@@ -30,20 +30,21 @@ export async function GET() {
         fileName: fileEntry.fileName,
         mimeType: fileEntry.mimeType,
         timestamp: fileEntry.timestamp,
-        accessCount: fileEntry.accessCount || 0
+        accessCount: fileEntry.accessCount || 0,
+        toolId: fileEntry.toolId // <--- Added toolId here
       });
     }
 
     return new Response(JSON.stringify({ success: true, files: filesList }), {
       status: 200,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
 
   } catch (error) {
     console.error('Error listing processed files:', error);
     return new Response(JSON.stringify({ success: false, message: `Server error: ${error.message}` }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   }
 }
