@@ -3,3 +3,4 @@ pypdf>=3.0.0
 pikepdf>=6.2.0
 reportlab>=3.6.12
 PyPDF2
+Pillow

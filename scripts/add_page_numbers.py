@@ -1,5 +1,6 @@
 import sys
 import os
+import tempfile # Import tempfile module
 from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter # Or whatever page size is appropriate
@@ -34,8 +35,8 @@ def add_page_numbers(input_pdf_path, output_pdf_path):
             # Create a temporary PDF for the page number overlay
             # Use a unique name to avoid conflicts, and ensure it's in a temp directory
             temp_overlay_filename = f"overlay_page_{i}_{os.getpid()}.pdf"
-            # Ensure the temp_overlay_path is in a writable directory, like os.tmpdir()
-            temp_overlay_path = os.path.join(os.tmpdir(), temp_overlay_filename)
+            # Corrected: Use tempfile.gettempdir() instead of os.tmpdir()
+            temp_overlay_path = os.path.join(tempfile.gettempdir(), temp_overlay_filename)
 
             # Create a canvas for the overlay
             # Get page dimensions to position text correctly
