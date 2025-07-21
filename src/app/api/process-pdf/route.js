@@ -254,15 +254,8 @@ export async function POST(request) {
         }
         const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
 
-        // Debugging logs for pdfBuffer before split
-        console.log(`[DEBUG] split: pdfBuffer type: ${typeof pdfBuffer}`);
-        console.log(`[DEBUG] split: pdfBuffer instanceof Buffer: ${pdfBuffer instanceof Buffer}`);
-        console.log(`[DEBUG] split: pdfBuffer length: ${pdfBuffer.length}`);
         if (pdfBuffer.length === 0) {
             throw new Error("Input PDF file is empty or corrupted.");
-        }
-        if (pdfBuffer.length > 0) {
-            console.log(`[DEBUG] split: pdfBuffer first 16 bytes: ${pdfBuffer.toString('hex', 0, 16)}`);
         }
 
         const { pageRange } = options; // Expecting a string like "1-7" or "1-3,5,8-10"
@@ -303,15 +296,6 @@ export async function POST(request) {
         // The @pdfme/manipulator split function expects an array of range objects
         const splitPdfs = await split(pdfBuffer, rangesToSplit); 
         
-        // NEW DEBUGGING: Log the result of split
-        console.log(`[DEBUG] split: Resulting splitPdfs length: ${splitPdfs.length}`);
-        splitPdfs.forEach((pdfPart, idx) => {
-            console.log(`[DEBUG] split: Part ${idx} type: ${typeof pdfPart}, instanceof Uint8Array: ${pdfPart instanceof Uint8Array}, length: ${pdfPart.length}`);
-            if (pdfPart.length > 0) {
-                console.log(`[DEBUG] split: Part ${idx} first 16 bytes: ${Buffer.from(pdfPart).toString('hex', 0, 16)}`);
-            }
-        });
-
         if (splitPdfs.length === 0) {
             throw new Error('Splitting resulted in no pages. Check page range and input PDF.');
         }
