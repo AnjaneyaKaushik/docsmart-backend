@@ -2,13 +2,13 @@ import sys
 import io
 from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.pdfbase import pdfmetrics
 from reportlab.lib.units import inch
 
 def add_page_numbers(input_pdf_path, output_pdf_path):
     """
-    Adds page numbers to each page of a PDF file using Helvetica font.
+    Adds page numbers to each page of a PDF file.
+    The page number will be in the format "N" (only number),
+    with font size 15, and positioned at the top right corner.
     """
     try:
         reader = PdfReader(input_pdf_path)
@@ -22,17 +22,19 @@ def add_page_numbers(input_pdf_path, output_pdf_path):
             page_height = float(page.mediabox.height)
             can = canvas.Canvas(packet, pagesize=(page_width, page_height))
             
-            # Set font to Helvetica (standard and reliable)
-            can.setFont('Helvetica', 10) 
+            # Set font to Helvetica (standard and reliable) and size 15
+            can.setFont('Helvetica', 15) 
             
-            # Position the page number (e.g., bottom right)
-            page_number_text = f"Page {i + 1}"
-            text_width = can.stringWidth(page_number_text, 'Helvetica', 10)
+            # Page number text format (only number)
+            page_number_text = f"{i + 1}"
             
-            # Calculate position for bottom-right corner, with some margin
+            # Calculate text width to correctly position it
+            text_width = can.stringWidth(page_number_text, 'Helvetica', 15) # Use font size 15 here for accurate width
+            
+            # Calculate position for top-right corner, with some margin
             margin = 0.5 * inch # Using ReportLab's inch unit
             x_position = page_width - text_width - margin
-            y_position = margin
+            y_position = page_height - margin # Position from top
 
             can.drawString(x_position, y_position, page_number_text)
             can.save()
@@ -60,3 +62,4 @@ if __name__ == "__main__":
     output_path = sys.argv[2]
 
     add_page_numbers(input_path, output_path)
+
