@@ -4,11 +4,10 @@ import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import archiver from 'archiver';
-import { exec, spawn } from 'child_process'; // Keep exec and spawn for other tools
+import { exec, spawn } from 'child_process';
 import os from 'os';
-
-// Removed PDF-LIB imports as we are going back to Python for security features
-// import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'; 
+// Removed node-qpdf2 imports as we are moving to Python for security features
+// import { encrypt, decrypt } from 'node-qpdf2'; 
 
 import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
 
@@ -153,7 +152,7 @@ async function processPdfSecurityWithPython(action, file, password) {
   const outputFilePath = path.join(os.tmpdir(), outputFileName);
 
   return new Promise((resolve, reject) => {
-    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'protect_pdf.py');
+    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'protect_pdf.py'); // Assuming protect_pdf.py handles both protect and unlock
     const pythonProcess = spawn('python3', [
       pythonScriptPath,
       action, // 'protect' or 'unlock'
@@ -195,6 +194,56 @@ async function processPdfSecurityWithPython(action, file, password) {
   });
 }
 
+// Placeholder for processDocxToPdfWithPython if it's not defined elsewhere
+async function processDocxToPdfWithPython(file) {
+  const uniqueId = uuidv4();
+  const outputDir = path.join(os.tmpdir(), `docx_pdf_py_output_${uniqueId}`);
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_converted.pdf`;
+  const outputFilePath = path.join(outputDir, outputFileName);
+
+  return new Promise((resolve, reject) => {
+    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'convert_docx_to_pdf.py'); // Assuming this script exists
+    const pythonProcess = spawn('python3', [ 
+      pythonScriptPath,
+      file.filepath,
+      outputFilePath
+    ]);
+
+    let stderrOutput = '';
+    pythonProcess.stderr.on('data', (data) => {
+      stderrOutput += data.toString();
+      console.error(`Python stderr (docx2pdf): ${data}`);
+    });
+
+    pythonProcess.on('close', async (code) => {
+      if (code === 0) {
+        try {
+          const processedBuffer = await fs.readFile(outputFilePath);
+          resolve({
+            processedBuffer,
+            processedFileName: outputFileName,
+            processedMimeType: 'application/pdf',
+            outputFilePath: outputFilePath 
+          });
+        } catch (readError) {
+          await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+          reject(new Error(`Failed to read converted PDF file: ${readError.message}`));
+        }
+      } else {
+        await fs.rm(outputDir, { recursive: true, force: true }).catch(console.error);
+        reject(new Error(`DOCX to PDF conversion failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+      }
+    });
+
+    pythonProcess.on('error', (err) => {
+      console.error('Failed to start Python subprocess (docx2pdf):', err);
+      reject(new Error(`Failed to start Python conversion process: ${err.message}. Is Python installed and in PATH?`));
+    });
+  });
+}
+
 
 export async function OPTIONS(request) {
   return new Response(null, {
@@ -205,6 +254,7 @@ export async function OPTIONS(request) {
 
 export async function POST(request) {
   let filesToProcess = [];
+  let qpdfOutputTempDir; 
   let finalOutputFilePathForCache; 
 
   try {
@@ -231,6 +281,17 @@ export async function POST(request) {
     let finalOutputExtension;
     let baseProcessedFileName;
     let tempOutputForCurrentTool; 
+
+    // The qpdfOutputTempDir is only needed if node-qpdf2 is used.
+    // Since we've transitioned protectPdf/unlockPdf to Python, this block is largely
+    // vestigial unless other tools still use node-qpdf2.
+    // Keeping it for now, but it might be removed if no tools use it.
+    if (['protectPdf', 'unlockPdf'].includes(toolId)) { // This condition will now always be false if using Python for these
+        // This block is effectively dead code if protectPdf/unlockPdf use Python.
+        // If other tools are added later that use node-qpdf2, this might become relevant again.
+        qpdfOutputTempDir = path.join(os.tmpdir(), `qpdf_output_${uuidv4()}`);
+        await fs.mkdir(qpdfOutputTempDir, { recursive: true });
+    }
 
     console.log(`Executing commands for tool: ${toolId}`);
 
@@ -569,6 +630,7 @@ export async function POST(request) {
         }
 
         const inputPdfPath = filesToProcess[0].filepath;
+        const uniqueId = uuidv4(); // Not directly used in current Python script but good for temp naming
         const outputFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_numbered.pdf`;
         const outputFilePath = path.join(os.tmpdir(), outputFileName);
 
@@ -621,13 +683,18 @@ export async function POST(request) {
         throw new Error(`Unsupported tool: ${toolId}`);
     }
 
+    // Prepend "DocSmart_" to the filename
     const finalOutputFileName = `DocSmart_${baseProcessedFileName || 'processed_file'}${finalOutputExtension}`;
     finalOutputFilePathForCache = path.join(os.tmpdir(), `${uuidv4()}_${finalOutputFileName}`); 
 
     if (tempOutputForCurrentTool) {
       await fs.rename(tempOutputForCurrentTool, finalOutputFilePathForCache);
     } else {
-      await fs.writeFile(finalOutputFilePathForCache, finalProcessedBuffer);
+      // Explicitly convert to Buffer to avoid TypeError
+      const bufferToWrite = Buffer.isBuffer(finalProcessedBuffer) ? finalProcessedBuffer : Buffer.from(finalProcessedBuffer);
+      console.log(`DEBUG: Type of finalProcessedBuffer before write: ${finalProcessedBuffer.constructor.name}`);
+      console.log(`DEBUG: Type of bufferToWrite before write: ${bufferToWrite.constructor.name}`);
+      await fs.writeFile(finalOutputFilePathForCache, bufferToWrite);
     }
 
     const uniqueFileId = uuidv4();
@@ -635,7 +702,7 @@ export async function POST(request) {
       filePath: finalOutputFilePathForCache, 
       fileName: finalOutputFileName,         
       mimeType: finalOutputMimeType,         
-      accessCount: 0,
+      accessCount: 0,                         
       toolId: toolId, // Store the toolId
       timestamp: Date.now() // Store the current timestamp
     };
@@ -669,6 +736,13 @@ export async function POST(request) {
         console.error(`Error cleaning up temporary input file ${file.filepath}:`, cleanupError);
       }
     }
-    // No specific qpdfOutputTempDir cleanup needed as Python script handles its own temp files
+    if (qpdfOutputTempDir) { 
+      try {
+        await fs.rm(qpdfOutputTempDir, { recursive: true, force: true });
+        console.log(`Cleaned up temporary node-qpdf2 output directory: ${qpdfOutputTempDir}`);
+      } catch (cleanupDirError) {
+        console.warn(`Could not clean up temporary node-qpdf2 output directory ${qpdfOutputTempDir}:`, cleanupDirError);
+      }
+    }
   }
 }
