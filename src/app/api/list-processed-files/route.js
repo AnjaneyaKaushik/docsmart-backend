@@ -1,6 +1,6 @@
 // src/app/api/list-processed-files/route.js
 
-import { processedFilesCache } from '@/lib/fileCache';
+import { processedFilesCache, getOverallProcessingStatus } from '@/lib/fileCache';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -31,18 +31,28 @@ export async function GET() {
         mimeType: fileEntry.mimeType,
         timestamp: fileEntry.timestamp,
         accessCount: fileEntry.accessCount || 0,
-        toolId: fileEntry.toolId // <--- Added toolId here
+        toolId: fileEntry.toolId 
       });
     }
 
-    return new Response(JSON.stringify({ success: true, files: filesList }), {
+    const isProcessing = getOverallProcessingStatus(); // Get real-time processing status
+
+    return new Response(JSON.stringify({ 
+      success: true, 
+      files: filesList,
+      isProcessing: isProcessing // Reflects if any job is active
+    }), {
       status: 200,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
 
   } catch (error) {
     console.error('Error listing processed files:', error);
-    return new Response(JSON.stringify({ success: false, message: `Server error: ${error.message}` }), {
+    return new Response(JSON.stringify({ 
+      success: false, 
+      message: `Server error: ${error.message}`,
+      isProcessing: getOverallProcessingStatus() // Still reflect current processing status on error
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });

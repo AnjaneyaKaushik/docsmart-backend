@@ -6,10 +6,8 @@ import { v4 as uuidv4 } from 'uuid';
 import archiver from 'archiver';
 import { exec, spawn } from 'child_process';
 import os from 'os';
-// Removed node-qpdf2 imports as we are moving to Python for security features
-// import { encrypt, decrypt } from 'node-qpdf2'; 
 
-import { processedFilesCache, startCleanupService } from '@/lib/fileCache'; 
+import { processedFilesCache, startCleanupService, addProcessingJob, updateProcessingJobStatus, removeProcessingJob } from '@/lib/fileCache'; 
 
 import { img2pdf, pdf2img } from '@pdfme/converter';
 import { merge, split, rotate } from '@pdfme/manipulator'; 
@@ -256,6 +254,7 @@ export async function POST(request) {
   let filesToProcess = [];
   let qpdfOutputTempDir; 
   let finalOutputFilePathForCache; 
+  const jobId = uuidv4(); // Generate a unique job ID for this request
 
   try {
     const formData = await request.formData();
@@ -263,7 +262,7 @@ export async function POST(request) {
     const files = formData.getAll('files');
     const options = JSON.parse(formData.get('options') || '{}');
 
-    console.log(`Received Request for ${toolId}, filecount: ${files.length}`);
+    console.log(`Received Request for ${toolId}, filecount: ${files.length}, Job ID: ${jobId}`);
 
     if (!toolId) {
       throw new Error('toolId is required');
@@ -271,6 +270,9 @@ export async function POST(request) {
     if (!files || files.length === 0) {
       throw new Error('No files uploaded');
     }
+
+    // Add job to processingJobs map as 'active'
+    addProcessingJob(jobId, toolId, files.map(f => f.name));
 
     for (const file of files) {
       filesToProcess.push(await saveFileLocally(file));
@@ -282,13 +284,7 @@ export async function POST(request) {
     let baseProcessedFileName;
     let tempOutputForCurrentTool; 
 
-    // The qpdfOutputTempDir is only needed if node-qpdf2 is used.
-    // Since we've transitioned protectPdf/unlockPdf to Python, this block is largely
-    // vestigial unless other tools still use node-qpdf2.
-    // Keeping it for now, but it might be removed if no tools use it.
-    if (['protectPdf', 'unlockPdf'].includes(toolId)) { // This condition will now always be false if using Python for these
-        // This block is effectively dead code if protectPdf/unlockPdf use Python.
-        // If other tools are added later that use node-qpdf2, this might become relevant again.
+    if (['protectPdf', 'unlockPdf'].includes(toolId)) { 
         qpdfOutputTempDir = path.join(os.tmpdir(), `qpdf_output_${uuidv4()}`);
         await fs.mkdir(qpdfOutputTempDir, { recursive: true });
     }
@@ -319,7 +315,7 @@ export async function POST(request) {
             throw new Error("Input PDF file is empty or corrupted.");
         }
 
-        const { pageRange } = options; // Expecting a string like "1-7" or "1-3,5,8-10"
+        const { pageRange } = options; 
 
         if (!pageRange || typeof pageRange !== 'string' || pageRange.trim() === '') {
             throw new Error('Page range (e.g., "1-7" or "1-3,5,8-10") is required for splitting.');
@@ -342,7 +338,6 @@ export async function POST(request) {
                 if (start < 1 || end < start) {
                     throw new Error(`Invalid pages in range "${rangeStr}". Pages must be positive and end page >= start page.`);
                 }
-                // Convert to 0-indexed, inclusive range for @pdfme/manipulator
                 rangesToSplit.push({ start: start - 1, end: end - 1 }); 
             } else {
                 const pageNum = Number(rangeStr);
@@ -354,23 +349,18 @@ export async function POST(request) {
             }
         }
 
-        // The @pdfme/manipulator split function expects an array of range objects
         const splitPdfs = await split(pdfBuffer, rangesToSplit); 
         
         if (splitPdfs.length === 0) {
             throw new Error('Splitting resulted in no pages. Check page range and input PDF.');
         }
 
-        // Determine if we should return a single PDF or a ZIP archive
         if (splitPdfs.length === 1) {
-            // If only one PDF part was generated (e.g., "1-7" or "3"), return it directly
             finalProcessedBuffer = splitPdfs[0]; 
             finalOutputMimeType = 'application/pdf';
             finalOutputExtension = '.pdf';
-            // Use the original file name with the range appended for single output
-            baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_split_${pageRange.replace(/[^a-zA-Z0-9-,]/g, '_')}`; // Allow comma in filename replacement
+            baseProcessedFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_split_${pageRange.replace(/[^a-zA-Z0-9-,]/g, '_')}`; 
         } else {
-            // If multiple PDF parts were generated (e.g., "1-3,5,8-10"), create a ZIP archive
             const archive = archiver('zip', { zlib: { level: 9 } });
             const zipBuffer = await new Promise((resolve, reject) => {
                 const buffers = [];
@@ -379,10 +369,8 @@ export async function POST(request) {
                 archive.on('error', (err) => reject(err));
 
                 splitPdfs.forEach((pdfUint8Array, index) => {
-                    // Name each PDF in the zip based on its original range or sequential number
                     let partName = `part_${index + 1}.pdf`;
                     if (rangesToSplit[index]) {
-                        // Attempt to use the original user-defined range for naming
                         const originalStart = rangesToSplit[index].start + 1;
                         const originalEnd = rangesToSplit[index].end + 1;
                         if (originalStart === originalEnd) {
@@ -411,11 +399,11 @@ export async function POST(request) {
         tempOutputForCurrentTool = path.join(os.tmpdir(), `compressed_${uuidv4()}.pdf`);
 
         const {
-            resolution = 'ebook', // Default to 'ebook' if not provided
+            resolution = 'ebook', 
             compatibilityLevel,
             pdfPassword,
             removePasswordAfterCompression,
-            gsModule = '/usr/bin/gs' // Default to where we installed gs
+            gsModule = '/usr/bin/gs' 
         } = options;
 
         let compressCommand = `npx compress-pdf --file "${inputPath}" --output "${tempOutputForCurrentTool}"`;
@@ -517,9 +505,8 @@ export async function POST(request) {
           }
 
           const imageBuffers = await Promise.all(filesToProcess.map(f => fs.readFile(f.filepath)));
-          // Convert Buffer to Uint8Array for img2pdf
           const imageUint8Arrays = imageBuffers.map(buffer => new Uint8Array(buffer));
-          finalProcessedBuffer = await img2pdf(imageUint8Arrays); // Pass Uint8Array
+          finalProcessedBuffer = await img2pdf(imageUint8Arrays); 
           finalOutputMimeType = 'application/pdf';
           finalOutputExtension = '.pdf';
           baseProcessedFileName = 'images_converted';
@@ -535,9 +522,8 @@ export async function POST(request) {
           }
 
           const pdfBuffer = await fs.readFile(filesToProcess[0].filepath);
-          // Convert Buffer to Uint8Array for pdf2img
-          const pdfUint8Array = new Uint8Array(pdfBuffer);
-          const images = await pdf2img(pdfUint8Array); // Pass Uint8Array
+          const pdfUint8Arrays = new Uint8Array(pdfBuffer);
+          const images = await pdf2img(pdfUint8Arrays); 
           
           if (images.length === 0) {
               throw new Error('Could not extract images from PDF.');
@@ -550,7 +536,6 @@ export async function POST(request) {
               archive.on('end', () => resolve(Buffer.concat(buffers)));
               archive.on('error', (err) => reject(err));
 
-              // Convert Uint8Array to Buffer before appending to archiver
               images.forEach((imgUint8Array, index) => {
                   archive.append(Buffer.from(imgUint8Array), { name: `page_${index + 1}.jpg` }); 
               });
@@ -630,7 +615,7 @@ export async function POST(request) {
         }
 
         const inputPdfPath = filesToProcess[0].filepath;
-        const uniqueId = uuidv4(); // Not directly used in current Python script but good for temp naming
+        const uniqueId = uuidv4(); 
         const outputFileName = `${path.basename(filesToProcess[0].originalFilename, '.pdf')}_numbered.pdf`;
         const outputFilePath = path.join(os.tmpdir(), outputFileName);
 
@@ -683,14 +668,12 @@ export async function POST(request) {
         throw new Error(`Unsupported tool: ${toolId}`);
     }
 
-    // Prepend "DocSmart_" to the filename
     const finalOutputFileName = `DocSmart_${baseProcessedFileName || 'processed_file'}${finalOutputExtension}`;
     finalOutputFilePathForCache = path.join(os.tmpdir(), `${uuidv4()}_${finalOutputFileName}`); 
 
     if (tempOutputForCurrentTool) {
       await fs.rename(tempOutputForCurrentTool, finalOutputFilePathForCache);
     } else {
-      // Explicitly convert to Buffer to avoid TypeError
       const bufferToWrite = Buffer.isBuffer(finalProcessedBuffer) ? finalProcessedBuffer : Buffer.from(finalProcessedBuffer);
       console.log(`DEBUG: Type of finalProcessedBuffer before write: ${finalProcessedBuffer.constructor.name}`);
       console.log(`DEBUG: Type of bufferToWrite before write: ${bufferToWrite.constructor.name}`);
@@ -703,19 +686,24 @@ export async function POST(request) {
       fileName: finalOutputFileName,         
       mimeType: finalOutputMimeType,         
       accessCount: 0,                         
-      toolId: toolId, // Store the toolId
-      timestamp: Date.now() // Store the current timestamp
+      toolId: toolId, 
+      timestamp: Date.now() 
     };
     processedFilesCache.set(uniqueFileId, cacheEntry);
-    console.log(`File cached: ${finalOutputFileName}, ID: ${uniqueFileId}, Access Count: ${cacheEntry.accessCount}`); // Log access count
+    console.log(`File cached: ${finalOutputFileName}, ID: ${uniqueFileId}, Access Count: ${cacheEntry.accessCount}`); 
+
+    // Update job status to 'completed'
+    updateProcessingJobStatus(jobId, 'completed', 1);
 
     return new Response(JSON.stringify({
       success: true,
       process: true,
+      isProcessing: false, // Processing for this request is complete
       downloadUrl: `/api/download-processed-file?id=${uniqueFileId}`,
       originalFileName: filesToProcess.length === 1 ? filesToProcess[0].originalFilename : null,
       processedFileName: finalOutputFileName,
       mimeType: finalOutputMimeType,
+      jobId: jobId // Return the job ID
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
@@ -723,7 +711,14 @@ export async function POST(request) {
 
   } catch (error) {
     console.error('Error during main workflow:', error);
-    return new Response(JSON.stringify({ success: false, message: `Server error: ${error.message}` }), {
+    // Update job status to 'failed'
+    updateProcessingJobStatus(jobId, 'failed', 0);
+    return new Response(JSON.stringify({ 
+      success: false, 
+      isProcessing: false, // Processing for this request has failed
+      message: `Server error: ${error.message}`,
+      jobId: jobId // Return the job ID
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
