@@ -4,7 +4,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import archiver from 'archiver';
-import { exec, spawn } from 'child_process';
+import { exec, spawn, execSync } from 'child_process'; // Import execSync
 import os from 'os';
 
 import { processedFilesCache, startCleanupService, addProcessingJob, updateProcessingJobStatus, removeProcessingJob } from '@/lib/fileCache'; 
@@ -242,6 +242,53 @@ async function processDocxToPdfWithPython(file) {
   });
 }
 
+// New helper function for adding watermark using Python
+async function processAddWatermarkWithPython(file) { 
+  const uniqueId = uuidv4();
+  const outputFileName = `${path.basename(file.originalFilename, path.extname(file.originalFilename))}_watermarked.pdf`;
+  const outputFilePath = path.join(os.tmpdir(), outputFileName);
+
+  return new Promise((resolve, reject) => {
+    const pythonScriptPath = path.join(process.cwd(), 'scripts', 'add_watermark.py');
+    const pythonProcess = spawn('python3', [
+      pythonScriptPath,
+      file.filepath,
+      outputFilePath
+    ]);
+
+    let stderrOutput = '';
+    pythonProcess.stderr.on('data', (data) => {
+      stderrOutput += data.toString();
+      console.error(`Python stderr (add_watermark.py): ${data}`);
+    });
+
+    pythonProcess.on('close', async (code) => {
+      if (code === 0) {
+        try {
+          const processedBuffer = await fs.readFile(outputFilePath);
+          resolve({
+            processedBuffer,
+            processedFileName: outputFileName,
+            processedMimeType: 'application/pdf',
+            outputFilePath: outputFilePath 
+          });
+        } catch (readError) {
+          await fs.rm(outputFilePath, { force: true }).catch(console.error);
+          reject(new Error(`Failed to read watermarked PDF file: ${readError.message}`));
+        }
+      } else {
+        await fs.rm(outputFilePath, { force: true }).catch(console.error);
+        reject(new Error(`Adding watermark failed (Python script exited with code ${code}). Stderr: ${stderrOutput}`));
+      }
+    });
+
+    pythonProcess.on('error', (err) => {
+      console.error('Failed to start Python subprocess (add_watermark.py):', err);
+      reject(new Error(`Failed to start Python watermark process: ${err.message}. Is Python installed and in PATH?`));
+    });
+  });
+}
+
 
 export async function OPTIONS(request) {
   return new Response(null, {
@@ -284,7 +331,7 @@ export async function POST(request) {
     let baseProcessedFileName;
     let tempOutputForCurrentTool; 
 
-    if (['protectPdf', 'unlockPdf'].includes(toolId)) { 
+    if (['protectPdf', 'unlockPdf', 'addWatermark'].includes(toolId)) { 
         qpdfOutputTempDir = path.join(os.tmpdir(), `qpdf_output_${uuidv4()}`);
         await fs.mkdir(qpdfOutputTempDir, { recursive: true });
     }
@@ -399,12 +446,48 @@ export async function POST(request) {
         tempOutputForCurrentTool = path.join(os.tmpdir(), `compressed_${uuidv4()}.pdf`);
 
         const {
-            resolution = 'ebook', 
+            resolutionAlias = 'medium', // Default to 'medium' if not provided
             compatibilityLevel,
             pdfPassword,
-            removePasswordAfterCompression,
-            gsModule = '/usr/bin/gs' 
+            removePasswordAfterCompression
         } = options;
+
+        // Map aliases to actual resolutions (corrected for expected behavior)
+        let resolution;
+        switch (resolutionAlias) {
+            case 'low': // Least compression, highest quality, largest file
+                resolution = 'prepress'; 
+                break;
+            case 'medium': // Balanced quality and file size
+                resolution = 'printer'; 
+                break;
+            // Removed 'high' as per user request
+            case 'extreme': // Most aggressive compression, smallest file size, most quality loss
+                resolution = 'ebook'; 
+                break;
+            default:
+                resolution = 'printer'; // Fallback to 'printer' (medium)
+                console.warn(`Unknown compression resolution alias: ${resolutionAlias}. Defaulting to 'medium'.`);
+        }
+
+        // Determine the Ghostscript path dynamically
+        let gsPath;
+        if (os.platform() === 'darwin') { // macOS
+            try {
+                // Common Homebrew paths for Ghostscript
+                const homebrewPrefix = execSync('brew --prefix').toString().trim();
+                gsPath = `${homebrewPrefix}/bin/gs`;
+            } catch (e) {
+                console.warn("Could not determine Homebrew prefix, falling back to default gs path.", e);
+                gsPath = '/usr/local/bin/gs'; // Fallback for older Homebrew or manual install
+            }
+        } else if (os.platform() === 'win32') { // Windows
+            gsPath = 'gs'; // Rely on PATH for Windows
+        } else { // Linux and other Unix-like systems
+            gsPath = '/usr/bin/gs'; // Default for many Linux distributions
+        }
+        console.log(`Using Ghostscript path: ${gsPath}`);
+
 
         let compressCommand = `npx compress-pdf --file "${inputPath}" --output "${tempOutputForCurrentTool}"`;
 
@@ -414,9 +497,9 @@ export async function POST(request) {
         if (compatibilityLevel !== undefined) {
             compressCommand += ` --compatibilityLevel ${compatibilityLevel}`;
         }
-        if (gsModule) {
-            compressCommand += ` --gsModule "${gsModule}"`;
-        }
+        // Explicitly set gsModule to the determined path
+        compressCommand += ` --gsModule "${gsPath}"`; 
+        
         if (pdfPassword) {
             compressCommand += ` --pdfPassword "${pdfPassword}"`;
         }
@@ -661,6 +744,24 @@ export async function POST(request) {
             }
             throw error;
         }
+        break;
+      }
+      case 'addWatermark': {
+        console.log(`Processing ${toolId} using Python script (add_watermark.py)`);
+        if (filesToProcess.length !== 1) {
+            throw new Error('Adding watermark requires exactly one PDF file.');
+        }
+        if (filesToProcess[0].mimetype !== 'application/pdf') {
+            throw new Error('Only PDF files are supported for adding watermarks.');
+        }
+
+        // No watermark parameters are taken from options, as they are hardcoded in the Python script
+        const pythonResult = await processAddWatermarkWithPython(filesToProcess[0]);
+        finalProcessedBuffer = pythonResult.processedBuffer;
+        finalOutputMimeType = pythonResult.processedMimeType;
+        finalOutputExtension = path.extname(pythonResult.processedFileName);
+        baseProcessedFileName = path.basename(filesToProcess[0].originalFilename, '.pdf') + '_watermarked';
+        tempOutputForCurrentTool = pythonResult.outputFilePath;
         break;
       }
 
