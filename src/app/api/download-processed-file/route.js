@@ -1,6 +1,7 @@
 // src/app/api/download-processed-file/route.js
 import { promises as fs } from 'fs';
-import { processedFilesCache } from '@/lib/fileCache'; // Import the cache
+import path from 'path';
+import { processedFilesCache, processingJobs } from '@/lib/fileCache'; // Import the cache and jobs
 
 export const dynamic = 'force-dynamic'; // Ensures the route is not cached
 export const runtime = 'nodejs'; // Essential for using Node.js APIs like 'fs'
@@ -28,7 +29,7 @@ export async function GET(request) {
   if (!fileId) {
     return new Response(JSON.stringify({ success: false, message: 'File ID is missing.' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   }
 
@@ -37,7 +38,7 @@ export async function GET(request) {
   if (!fileEntry) {
     return new Response(JSON.stringify({ success: false, message: 'File not found or has expired.' }), {
       status: 404,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   }
 
@@ -55,6 +56,18 @@ export async function GET(request) {
       try {
         await fs.unlink(fileEntry.filePath); // Delete from disk
         processedFilesCache.delete(fileId); // Remove from cache
+        
+        // Update any jobs that reference this file to indicate it's been automatically cleaned up
+        for (const [jobId, job] of processingJobs.entries()) {
+          if (job.fileId === fileId) {
+            job.fileDeleted = true;
+            job.fileDeletedAt = Date.now();
+            job.fileDeletedReason = 'auto_cleanup';
+            processingJobs.set(jobId, job);
+            console.log(`Updated job ${jobId} to indicate automatic file cleanup`);
+          }
+        }
+        
         console.log(`Successfully served and cleaned up file after ${fileEntry.accessCount} accesses: ${fileEntry.filePath}`);
       } catch (cleanupError) {
         console.error(`Error cleaning up file after download ${fileEntry.filePath}:`, cleanupError);
@@ -71,7 +84,7 @@ export async function GET(request) {
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate', // Prevent caching
       'Pragma': 'no-cache',
       'Expires': '0',
-      ...corsHeaders // <--- Added CORS headers here
+      ...corsHeaders
     };
 
     return new Response(fileBuffer, {
@@ -82,7 +95,7 @@ export async function GET(request) {
     console.error(`Error serving file ${fileId}:`, error);
     return new Response(JSON.stringify({ success: false, message: `Server error: ${error.message}` }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders }, // <--- Added CORS headers
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
     });
   }
 }  

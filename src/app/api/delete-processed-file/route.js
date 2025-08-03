@@ -1,7 +1,7 @@
 // src/app/api/delete-processed-file/route.js
 
 import { promises as fs } from 'fs';
-import { processedFilesCache } from '@/lib/fileCache'; // Import the cache
+import { processedFilesCache, processingJobs } from '@/lib/fileCache'; // Import the cache and jobs
 
 export const dynamic = 'force-dynamic'; // Ensures the route is not cached
 export const runtime = 'nodejs'; // Essential for using Node.js APIs like 'fs'
@@ -48,6 +48,16 @@ export async function DELETE(request) {
 
     // Remove the file from the cache
     processedFilesCache.delete(fileId);
+
+    // Update any jobs that reference this file to indicate it's been deleted
+    for (const [jobId, job] of processingJobs.entries()) {
+      if (job.fileId === fileId) {
+        job.fileDeleted = true;
+        job.fileDeletedAt = Date.now();
+        processingJobs.set(jobId, job);
+        console.log(`Updated job ${jobId} to indicate file deletion`);
+      }
+    }
 
     console.log(`Successfully deleted file from disk and cache: ${fileEntry.filePath}`);
 

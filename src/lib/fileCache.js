@@ -30,6 +30,7 @@ export const processingJobs = globalThis[PROCESSING_JOBS_KEY];
 
 // Configuration for cleanup
 const CLEANUP_INTERVAL = 10 * 60 * 1000; // 10 minutes
+const JOB_ACCESS_PERIOD = 10 * 60 * 1000; // 10 minutes - how long completed jobs stay available
 
 // Function to clean up expired files from the cache and disk
 function cleanupExpiredFiles() {
@@ -50,12 +51,11 @@ function cleanupExpiredFiles() {
 
   // Additionally, clean up old entries in processingJobs if they are completed/failed
   for (const [jobId, jobData] of processingJobs.entries()) {
-    // Remove jobs that are completed or failed after a certain grace period (e.g., 1 hour)
-    // This prevents the map from growing indefinitely.
-    const GRACE_PERIOD = 60 * 60 * 1000; // 1 hour
-    if (jobData.status !== 'active' && (now - jobData.timestamp) > GRACE_PERIOD) {
+    // Remove jobs that are completed or failed after the access period (10 minutes)
+    // This prevents the map from growing indefinitely and gives clients time to check status and download.
+    if (jobData.status !== 'active' && (now - jobData.timestamp) > JOB_ACCESS_PERIOD) {
       processingJobs.delete(jobId);
-      console.log(`Cleaned up old processing job: ${jobId} (status: ${jobData.status})`);
+      console.log(`Cleaned up old processing job: ${jobId} (status: ${jobData.status}) after ${JOB_ACCESS_PERIOD / 1000 / 60} minutes`);
     }
   }
 }
@@ -72,16 +72,22 @@ export function addProcessingJob(jobId, toolId, fileNames) {
   console.log(`Added processing job: ${jobId}, Tool: ${toolId}, Files: ${fileNames.join(', ')}`);
 }
 
-export function updateProcessingJobStatus(jobId, status, progress = null) {
+export function updateProcessingJobStatus(jobId, status, progress = null, outputFileName = null, fileId = null) {
   const job = processingJobs.get(jobId);
   if (job) {
     job.status = status;
     if (progress !== null) {
       job.progress = progress;
     }
+    if (outputFileName !== null) {
+      job.outputFileName = outputFileName;
+    }
+    if (fileId !== null) {
+      job.fileId = fileId;
+    }
     job.timestamp = Date.now(); // Update timestamp on status change
     processingJobs.set(jobId, job);
-    console.log(`Updated processing job: ${jobId}, Status: ${status}, Progress: ${progress !== null ? progress : job.progress}`);
+    console.log(`Updated processing job: ${jobId}, Status: ${status}, Progress: ${progress !== null ? progress : job.progress}, Output: ${outputFileName || 'none'}, FileId: ${fileId || 'none'}`);
   }
 }
 

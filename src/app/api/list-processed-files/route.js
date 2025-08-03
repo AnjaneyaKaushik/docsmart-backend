@@ -1,6 +1,6 @@
 // src/app/api/list-processed-files/route.js
 
-import { processedFilesCache, getOverallProcessingStatus } from '@/lib/fileCache';
+import { processedFilesCache, processingJobs, getOverallProcessingStatus } from '@/lib/fileCache';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -31,8 +31,32 @@ export async function GET() {
         mimeType: fileEntry.mimeType,
         timestamp: fileEntry.timestamp,
         accessCount: fileEntry.accessCount || 0,
-        toolId: fileEntry.toolId 
+        toolId: fileEntry.toolId,
+        status: 'available'
       });
+    }
+
+    // Also include jobs with deleted files that are still within the access period
+    for (const [jobId, job] of processingJobs.entries()) {
+      if (job.status === 'succeeded' && job.fileDeleted && job.fileId) {
+        // Check if this job is still within the access period (10 minutes)
+        const now = Date.now();
+        const jobAge = now - job.timestamp;
+        const accessPeriod = 10 * 60 * 1000; // 10 minutes
+        
+        if (jobAge <= accessPeriod) {
+          filesList.push({
+            id: job.fileId,
+            fileName: job.outputFileName,
+            mimeType: 'application/pdf', // Default for most processed files
+            timestamp: job.timestamp,
+            accessCount: 0, // File is deleted, so no more accesses
+            toolId: job.toolId,
+            status: 'deleted',
+            deletionReason: job.fileDeletedReason || 'manual'
+          });
+        }
+      }
     }
 
     const isProcessing = getOverallProcessingStatus(); // Get real-time processing status
