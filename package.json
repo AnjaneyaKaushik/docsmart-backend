@@ -2,17 +2,20 @@
   "name": "docsmart-backend",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev ",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "start:worker": "node --env-file=.env.local src/worker.js"
   },
   "dependencies": {
     "@pdfme/converter": "^5.4.0",
     "@pdfme/manipulator": "^5.4.0",
     "@peculiar/pdf-doc": "^1.17.2",
     "@peculiar/pdf-repair": "^1.17.2",
+    "@supabase/supabase-js": "^2.53.0",
     "archiver": "^7.0.1",
     "canvas": "^2.11.2",
     "child-process": "^1.0.2",
